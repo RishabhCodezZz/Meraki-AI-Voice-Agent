@@ -135,7 +135,7 @@ async def stream_llm_response(user_text: str, session_id: str, api_keys: Dict[st
         history = chat_histories.get(session_id, [])
 
         model = genai.GenerativeModel(
-            "gemini-1.5-flash",
+            "gemini-2.5-flash",
             system_instruction=AI_SYSTEM_PROMPT
         )
 
