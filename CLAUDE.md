@@ -69,6 +69,10 @@ use with `preview_start`.
 - **The mic is never connected to `destination`.** The capture worklet has
   `numberOfOutputs: 0`. Connecting it to the speakers creates a feedback path
   into the transcriber.
+- **Every promise in `connect()` must settle.** A fatal error can arrive before
+  `ready` (a bad Deepgram key does exactly this). Leaving the promise pending
+  hangs `startRecording` with the mic button stuck disabled - that was a real
+  regression, fixed and covered by the smoke script.
 - **TTS chunk thresholds are floors, not targets.** `FIRST_CHUNK_MIN_CHARS` (12)
   is where we *start looking* for a sentence boundary, so a short opener ships
   immediately. Raising it directly increases time-to-first-audio.
@@ -134,9 +138,17 @@ The original was a single 590-line `app.py` plus one 390-line HTML file. Audited
   WebSocket instead of a synchronous SDK — which is what let the threading layer
   go away. AssemblyAI measures better on realtime accuracy benchmarks; that was
   the trade.
-- **Nemotron 3 Nano as default.** On a voice agent, time-to-first-token is heard
-  directly as dead air. The larger free models are a real trade, not a free
-  upgrade, so the picker labels them that way.
+- **Nemotron 3 Nano, locked.** On a voice agent, time-to-first-token is heard
+  directly as dead air, and Nano is the fastest model on Ollama Cloud's free
+  tier. Falcon was requested but is not an Ollama Cloud model at all (and is
+  TII's, not ours), so there was nothing faster to move to.
+- **Model and voice are server-side, not user-selectable.** The page does not
+  ask and the handshake ignores any `model` / `voice_id` a client sends. Change
+  them with `MERAKI_MODEL` / `MERAKI_VOICE_ID` / `MERAKI_VOICE_STYLE`.
+- **Murf `encodeAsBase64` + 24 kHz.** Inline audio removes a second round trip
+  per chunk; 24 kHz halves the bytes and speech does not need the headroom.
+  `Conversational` style is what makes it sound friendly - more than the voice
+  choice does - and an unsupported style is dropped and retried, once, cached.
 - **No news/weather/tool APIs.** Every remaining key is load-bearing. Optional
   integrations were the source of the worst prompt bug in the original.
 - **Spider-Man-flavoured persona, kept at the user's request.** The prompt names
@@ -159,6 +171,10 @@ The original was a single 590-line `app.py` plus one 390-line HTML file. Audited
 ## 9. Changelog
 
 - **2026-09-06** — Audited the original. 3 P0, 7 P1, 17 P2 defects documented.
+- **2026-09-06** — Locked model and voice server-side (pickers removed). Murf
+  now returns inline base64 at 24 kHz with the Conversational style, cutting a
+  round trip per chunk. Fixed a hang where a pre-`ready` fatal error left the
+  mic button permanently disabled. Tests 19 → 46.
 - **2026-09-06** — Restored the Spider-Man persona, rewritten so wit and voice
   brevity no longer conflict. Accent amber → red, spider brand mark, tagline
   back. White-on-red button contrast checked at 5.3:1 (AA).

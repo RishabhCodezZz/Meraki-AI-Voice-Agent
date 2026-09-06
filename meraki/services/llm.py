@@ -20,7 +20,7 @@ from typing import AsyncGenerator
 
 import aiohttp
 
-from ..config import LLM_STALL_TIMEOUT, OLLAMA_CHAT_URL, SYSTEM_PROMPT
+from ..config import LLM_STALL_TIMEOUT, MODEL, OLLAMA_CHAT_URL, SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,6 @@ class LLMError(RuntimeError):
 async def stream_reply(
     session: aiohttp.ClientSession,
     api_key: str,
-    model: str,
     history: list[dict],
     user_text: str,
 ) -> AsyncGenerator[str, None]:
@@ -51,7 +50,7 @@ async def stream_reply(
     )
 
     payload = {
-        "model": model,
+        "model": MODEL,
         "messages": messages,
         "stream": True,
         "think": False,
@@ -78,7 +77,7 @@ async def stream_reply(
         if response.status != 200:
             detail = (await response.text())[:400]
             logger.error("Ollama %s: %s", response.status, detail)
-            raise LLMError(_explain(response.status, model, detail))
+            raise LLMError(_explain(response.status, detail))
 
         async for raw_line in response.content:
             line = raw_line.decode("utf-8", errors="replace").strip()
@@ -101,11 +100,11 @@ async def stream_reply(
                 break
 
 
-def _explain(status: int, model: str, detail: str) -> str:
+def _explain(status: int, detail: str) -> str:
     if status in (401, 403):
         return "Ollama rejected that API key."
     if status == 404:
-        return f"Model '{model}' is not available on your Ollama account."
+        return f"Model '{MODEL}' is not available on your Ollama account."
     if status == 429:
         return "Ollama rate limit reached - the free tier has hourly caps."
     if status >= 500:

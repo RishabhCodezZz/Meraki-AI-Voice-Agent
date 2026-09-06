@@ -43,7 +43,8 @@ Then open **http://127.0.0.1:8000**.
 ### Where the keys go
 
 Click **Settings** (top right) → three password fields → **Save**. That is the
-only place you need to paste anything. The dialog opens by itself on first load.
+only place you need to paste anything, and the only thing that is configurable.
+The dialog opens by itself on first load.
 
 | Field | Get it from | Free tier |
 |---|---|---|
@@ -61,23 +62,23 @@ Press **Start talking** and speak. Interrupt it whenever you like — it stops.
 Prefer server-side keys? Copy `.env.example` to `.env` and fill it in; anything
 entered in the UI wins over the file.
 
-## Models
+## Model and voice
 
-All six are on Ollama Cloud's free tier. Ordered by how quickly they start
-talking, which matters more here than in a chat window — every extra second of
-thinking is a second of silence.
+Both are fixed server-side and cannot be changed from the browser — the page
+never asks, and anything a client sends for them is ignored.
 
-| Model | Notes |
-|---|---|
-| `nemotron-3-nano:30b` | default; fastest to first word |
-| `gpt-oss:20b` | fast |
-| `gemma4:31b` | balanced |
-| `nemotron-3-super` | smarter, slower |
-| `gpt-oss:120b` | smarter, slower |
-| `nemotron-3-ultra` | slowest |
+- **`nemotron-3-nano:30b`** on Ollama Cloud. It is the fastest model on the free
+  tier, which is the property that matters here: time to first token is heard
+  directly as dead air. Nemotron is a reasoning model, so requests send
+  `think: false` — reasoning tokens arrive before anything speakable and buy
+  nothing when the output is audio.
+- **`en-US-natalie` with the `Conversational` style.** The style does more for
+  how friendly it sounds than the choice of voice does; it is the difference
+  between someone talking and someone reading. If a voice ever rejects the
+  style, synthesis retries once without it rather than failing the turn.
 
-Nemotron models are reasoning models, so Meraki sends `think: false`. Reasoning
-tokens arrive before anything speakable and buy nothing when the output is audio.
+Override either with `MERAKI_MODEL` / `MERAKI_VOICE_ID` / `MERAKI_VOICE_STYLE`
+in the environment.
 
 ## Layout
 
@@ -106,8 +107,21 @@ static/js/
 python -m pytest tests/ -q
 ```
 
-Covers chunk splitting, the session store, and key resolution. No network, no
-keys required.
+46 tests, no network and no keys. They cover the parts where being wrong is
+quiet rather than loud:
+
+- **Chunk splitting** — every character survives, the first chunk stays short,
+  nothing exceeds the cap even with no punctuation to cut on.
+- **Deepgram turn assembly** — settled segments join into one utterance and
+  nothing fires until endpointing does. Acting on `is_final` alone would chop
+  sentences into fragments, each triggering its own reply.
+- **Barge-in** — an interrupted turn still records what was already spoken, so
+  the conversation stays coherent; a turn cancelled before any token records
+  nothing at all.
+- **Failure modes** — a TTS failure still releases the UI, an unexpected crash
+  does not leak internal detail into a user-facing message.
+- **The Murf request shape** — inline base64 is requested (no download round
+  trip) and an unsupported style is dropped and retried rather than failing.
 
 ## Notes
 
@@ -117,3 +131,27 @@ keys required.
   — share the link or reload and the conversation continues. It does not survive
   a server restart.
 - `Space` toggles the mic when nothing else is focused.
+
+## Engineering notes
+
+The parts that were interesting to build:
+
+**Pipelined synthesis.** Reply text is cut on clause boundaries as it streams
+out of the model, up to three chunks are synthesised concurrently, and results
+are yielded strictly in order onto the Web Audio clock. The first chunk's
+threshold is deliberately tiny (12 characters) so a short opener ships
+immediately — raising it directly increases time-to-first-audio.
+
+**Barge-in as task cancellation.** A turn is one `asyncio.Task`. Interrupting
+cancels it, which unwinds the in-flight HTTP request and every pending synthesis
+task through normal exception propagation. The partial reply is recorded in a
+`finally`, so an interrupted answer still enters history.
+
+**No threads.** Deepgram's streaming API is a plain WebSocket, so the entire
+backend is single-threaded asyncio. An earlier version used a vendor SDK whose
+synchronous `stream()` call forced a worker thread, a blocking queue, and a
+thread-safe event bridge; switching providers deleted all three.
+
+**Credentials scoped to a connection.** Keys arrive in the opening frame and
+live only on the connection object. There is no module-level key state, so
+concurrent visitors cannot see or spend each other's credits.

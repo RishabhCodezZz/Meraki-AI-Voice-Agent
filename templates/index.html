@@ -107,31 +107,10 @@
         <a class="field__get" href="https://murf.ai/api/docs/introduction/overview" target="_blank" rel="noopener noreferrer">Get a key</a>
       </label>
 
-      <div class="row">
-        <label class="field field--select">
-          <span class="field__label">Model</span>
-          <select id="model">
-            {% for model in models %}
-            <option value="{{ model.id }}" {% if model.id == default_model %}selected{% endif %}>
-              {{ model.label }} — {{ model.note }}
-            </option>
-            {% endfor %}
-          </select>
-        </label>
 
-        <label class="field field--select">
-          <span class="field__label">Voice</span>
-          <select id="voice">
-            {% for voice in voices %}
-            <option value="{{ voice.id }}" {% if voice.id == default_voice %}selected{% endif %}>{{ voice.label }}</option>
-            {% endfor %}
-          </select>
-        </label>
-      </div>
 
       <p class="sheet__hint">
-        Ollama's free tier covers every model listed. Smaller models reply sooner,
-        which matters more in conversation than it does in chat.
+        Nothing else to configure. The model and voice are set by the app.
       </p>
 
       <button type="submit" class="primary">Save</button>

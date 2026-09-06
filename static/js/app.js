@@ -5,8 +5,6 @@ import { Visualizer } from './visualizer.js';
 const KEY_FIELDS = ['deepgram', 'ollama', 'murf'];
 const REQUIRED = KEY_FIELDS;
 const STORAGE_KEYS = 'meraki.keys';
-const STORAGE_VOICE = 'meraki.voice';
-const STORAGE_MODEL = 'meraki.model';
 
 const el = (id) => document.getElementById(id);
 
@@ -27,8 +25,6 @@ const ui = {
   settingsBtn: el('settings-btn'),
   closeSettings: el('close-settings'),
   clearBtn: el('clear-btn'),
-  voiceSelect: el('voice'),
-  modelSelect: el('model'),
   toasts: el('toasts'),
 };
 
@@ -79,7 +75,10 @@ function missingKeys() {
 
 // --- chrome ------------------------------------------------------------------
 
+let uiState = 'idle';
+
 function setState(state, label) {
+  uiState = state;
   visualizer.setState(state);
   ui.status.textContent = label;
   ui.statusDot.dataset.state = state;
@@ -161,15 +160,31 @@ function connect() {
     const ws = new WebSocket(socketUrl());
     ws.binaryType = 'arraybuffer';
 
-    const failed = () => reject(new Error('Could not reach the server.'));
+    // The promise must settle on every path. A fatal error can arrive before
+    // 'ready' (a bad Deepgram key, say), and if that left the promise pending
+    // startRecording would await forever with the button stuck disabled.
+    let settled = false;
+    const succeed = () => {
+      if (settled) return;
+      settled = true;
+      resolve(ws);
+    };
+    const failed = (message) => {
+      if (settled) return;
+      settled = true;
+      try {
+        ws.close();
+      } catch {
+        /* already closing */
+      }
+      reject(new Error(message || 'Could not reach the server.'));
+    };
 
     ws.onopen = () => {
       ws.send(
         JSON.stringify({
           type: 'config',
           session_id: sessionId(),
-          voice_id: ui.voiceSelect.value,
-          model: ui.modelSelect.value,
           keys: loadKeys(),
         })
       );
@@ -184,13 +199,20 @@ function connect() {
       }
       if (message.type === 'ready') {
         ws.onerror = null;
-        resolve(ws);
+        succeed();
+        return;
+      }
+      if (message.type === 'error' && !settled) {
+        // Surfaced by startRecording's catch; don't double-toast it here.
+        failed(message.message);
+        return;
       }
       handleMessage(message);
     };
 
-    ws.onerror = failed;
+    ws.onerror = () => failed();
     ws.onclose = (event) => {
+      failed('The server closed the connection.');
       if (recording) {
         stopRecording({ silent: true });
         if (!event.wasClean) toast('Connection lost.', 'error');
@@ -282,7 +304,9 @@ async function startRecording() {
       onFrame: (buffer) => {
         if (socket && socket.readyState === WebSocket.OPEN) socket.send(buffer);
       },
-      onLevel: (bins) => visualizer.setSpectrum(bins),
+      onLevel: (bins) => {
+        if (uiState === 'listening') visualizer.setSpectrum(bins);
+      },
     });
     await mic.start();
 
@@ -367,16 +391,6 @@ ui.closeSettings.addEventListener('click', () => ui.settings.close());
 ui.settingsForm.addEventListener('submit', submitSettings);
 ui.clearBtn.addEventListener('click', clearHistory);
 
-ui.voiceSelect.addEventListener('change', () => {
-  localStorage.setItem(STORAGE_VOICE, ui.voiceSelect.value);
-  if (recording) toast('New voice applies next time you start.');
-});
-
-ui.modelSelect.addEventListener('change', () => {
-  localStorage.setItem(STORAGE_MODEL, ui.modelSelect.value);
-  if (recording) toast('New model applies next time you start.');
-});
-
 document.addEventListener('keydown', (event) => {
   if (event.code === 'Space' && event.target === document.body) {
     event.preventDefault();
@@ -387,11 +401,6 @@ document.addEventListener('keydown', (event) => {
 window.addEventListener('beforeunload', () => {
   if (socket) socket.close();
 });
-
-const savedVoice = localStorage.getItem(STORAGE_VOICE);
-if (savedVoice) ui.voiceSelect.value = savedVoice;
-const savedModel = localStorage.getItem(STORAGE_MODEL);
-if (savedModel) ui.modelSelect.value = savedModel;
 
 sessionId();
 loadHistory();

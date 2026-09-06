@@ -23,29 +23,24 @@ MURF_TTS_URL = "https://api.murf.ai/v1/speech/generate"
 
 DEEPGRAM_MODEL = os.getenv("MERAKI_STT_MODEL", "nova-3")
 
-DEFAULT_MODEL = os.getenv("MERAKI_MODEL", "nemotron-3-nano:30b")
+# Locked server-side. Visitors cannot change these - the browser is not asked
+# and any model/voice it sends is ignored.
+#
+# nemotron-3-nano is the fastest model on Ollama Cloud's free tier, which is what
+# matters here: time to first token is heard directly as dead air. Falcon is not
+# an Ollama Cloud model (and is TII's, not ours), so there is nothing faster to
+# move to on this tier.
+MODEL = os.getenv("MERAKI_MODEL", "nemotron-3-nano:30b")
 
-# Ollama Cloud's free tier. Ordered fastest-first: on a voice agent, time to
-# first token is felt directly as dead air, so the large models are a real
-# trade rather than a free upgrade.
-AVAILABLE_MODELS: list[dict[str, str]] = [
-    {"id": "nemotron-3-nano:30b", "label": "Nemotron 3 Nano", "note": "fastest"},
-    {"id": "gpt-oss:20b", "label": "GPT-OSS 20B", "note": "fast"},
-    {"id": "gemma4:31b", "label": "Gemma 4 31B", "note": "balanced"},
-    {"id": "nemotron-3-super", "label": "Nemotron 3 Super", "note": "smarter, slower"},
-    {"id": "gpt-oss:120b", "label": "GPT-OSS 120B", "note": "smarter, slower"},
-    {"id": "nemotron-3-ultra", "label": "Nemotron 3 Ultra", "note": "slowest"},
-]
+# Natalie with the Conversational style. The style is what makes her sound like
+# a person talking rather than an announcer reading - it matters more than which
+# voice you pick. Confirmed supported for this voice.
+VOICE_ID = os.getenv("MERAKI_VOICE_ID", "en-US-natalie")
+VOICE_STYLE = os.getenv("MERAKI_VOICE_STYLE", "Conversational")
 
-DEFAULT_VOICE_ID = os.getenv("MERAKI_VOICE_ID", "en-US-natalie")
-
-AVAILABLE_VOICES: list[dict[str, str]] = [
-    {"id": "en-US-natalie", "label": "Natalie · US"},
-    {"id": "en-US-terrell", "label": "Terrell · US"},
-    {"id": "en-UK-hazel", "label": "Hazel · UK"},
-    {"id": "en-IN-aarav", "label": "Aarav · IN"},
-    {"id": "en-AU-jimm", "label": "Jimm · AU"},
-]
+# 24 kHz is plenty for speech and roughly half the bytes of Murf's 44.1 kHz
+# default, so each chunk lands sooner.
+TTS_SAMPLE_RATE = 24000
 
 # --- Audio -------------------------------------------------------------------
 

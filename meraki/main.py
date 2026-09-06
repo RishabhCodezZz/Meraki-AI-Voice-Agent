@@ -17,10 +17,6 @@ from .config import (
     APP_NAME,
     APP_TAGLINE,
     APP_VERSION,
-    AVAILABLE_MODELS,
-    AVAILABLE_VOICES,
-    DEFAULT_MODEL,
-    DEFAULT_VOICE_ID,
     ApiKeys,
 )
 from .pipeline import TurnPipeline
@@ -71,10 +67,6 @@ async def index(request: Request):
             "app_name": APP_NAME,
             "tagline": APP_TAGLINE,
             "version": APP_VERSION,
-            "voices": AVAILABLE_VOICES,
-            "default_voice": DEFAULT_VOICE_ID,
-            "models": AVAILABLE_MODELS,
-            "default_model": DEFAULT_MODEL,
         },
     )
 
@@ -129,8 +121,6 @@ class _Connection:
         self._turn: Optional[asyncio.Task] = None
         self._pump: Optional[asyncio.Task] = None
         self._keys: Optional[ApiKeys] = None
-        self._model = DEFAULT_MODEL
-        self._voice_id = DEFAULT_VOICE_ID
         self._session_id = ""
         self._send_lock = asyncio.Lock()
 
@@ -183,20 +173,9 @@ class _Connection:
 
         self._keys = keys
         self._session_id = str(message.get("session_id") or "").strip() or "anonymous"
-        voice = str(message.get("voice_id") or "").strip()
-        if voice in {item["id"] for item in AVAILABLE_VOICES}:
-            self._voice_id = voice
-
-        model = str(message.get("model") or "").strip()
-        if model in {item["id"] for item in AVAILABLE_MODELS}:
-            self._model = model
-
-        logger.info(
-            "Session %s configured (model=%s voice=%s)",
-            self._session_id,
-            self._model,
-            self._voice_id,
-        )
+        # Model and voice are server-side settings. Anything the browser sends
+        # for them is ignored on purpose.
+        logger.info("Session %s configured", self._session_id)
         return True
 
     # -- inbound ------------------------------------------------------------
@@ -254,8 +233,6 @@ class _Connection:
             http=_http,
             keys=self._keys,
             conversation=sessions.get(self._session_id),
-            model=self._model,
-            voice_id=self._voice_id,
         )
         await pipeline.run(text)
 

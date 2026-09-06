@@ -8,6 +8,12 @@ Here the reply is split into clause-sized chunks as it streams in. The first
 chunk is deliberately short so sound starts almost immediately; later chunks are
 longer to keep request count down. Synthesis runs concurrently but results are
 yielded strictly in order, so playback is seamless.
+
+Two things keep each chunk cheap:
+  - ``encodeAsBase64`` returns the audio in the response body, so there is no
+    second round trip to download the MP3 from a URL.
+  - 24 kHz instead of Murf's 44.1 kHz default is roughly half the bytes, and
+    speech does not need the headroom.
 """
 
 from __future__ import annotations
@@ -16,7 +22,7 @@ import asyncio
 import base64
 import logging
 import re
-from typing import AsyncGenerator, AsyncIterable
+from typing import AsyncGenerator, AsyncIterable, Optional
 
 import aiohttp
 
@@ -25,7 +31,10 @@ from ..config import (
     CHUNK_MIN_CHARS,
     FIRST_CHUNK_MIN_CHARS,
     MURF_TTS_URL,
+    TTS_SAMPLE_RATE,
     TTS_TIMEOUT,
+    VOICE_ID,
+    VOICE_STYLE,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,6 +44,10 @@ MAX_IN_FLIGHT = 3
 # A boundary we are happy to cut on, strongest first.
 _SENTENCE_END = re.compile(r"[.!?…]['\")\]]*\s")
 _CLAUSE_END = re.compile(r"[,;:—]\s")
+
+# Set once, the first time Murf tells us the style is not valid for this voice,
+# so we stop paying for a failed request on every subsequent chunk.
+_style_supported = True
 
 
 class TTSError(RuntimeError):
@@ -63,20 +76,16 @@ async def chunk_stream(text_stream: AsyncIterable[str]) -> AsyncGenerator[str, N
         yield tail
 
 
-def _find_cut(buffer: str, threshold: int) -> int | None:
+def _find_cut(buffer: str, threshold: int) -> Optional[int]:
     """Index to split ``buffer`` at, or None to keep accumulating."""
     if len(buffer) < threshold:
         return None
 
     window = buffer[:CHUNK_MAX_CHARS]
 
-    last_sentence = None
     for match in _SENTENCE_END.finditer(window):
         if match.end() >= threshold:
-            last_sentence = match.end()
-            break
-    if last_sentence:
-        return last_sentence
+            return match.end()
 
     if len(buffer) >= CHUNK_MAX_CHARS:
         for match in _CLAUSE_END.finditer(window):
@@ -95,42 +104,81 @@ async def synthesize(
     session: aiohttp.ClientSession,
     api_key: str,
     text: str,
-    voice_id: str,
+    voice_id: str = VOICE_ID,
 ) -> str:
     """Render one chunk of text and return it as base64 MP3."""
     if not api_key:
         raise TTSError("Murf API key is missing.")
 
+    global _style_supported
+
+    plain = {
+        "text": text,
+        "voiceId": voice_id,
+        "format": "MP3",
+        "sampleRate": TTS_SAMPLE_RATE,
+        "encodeAsBase64": True,
+    }
+    styled = VOICE_STYLE and _style_supported
+    # Build a separate dict rather than mutating one across both attempts.
+    payload = {**plain, "style": VOICE_STYLE} if styled else plain
+
+    result, rejected = await _post(session, api_key, payload)
+
+    if rejected is not None and styled:
+        # This voice does not take the configured style. Drop it and carry on
+        # rather than failing the turn; remember so we stop retrying.
+        logger.warning(
+            "Murf rejected style %r for %s; continuing without it (%s)",
+            VOICE_STYLE,
+            voice_id,
+            rejected,
+        )
+        _style_supported = False
+        result, rejected = await _post(session, api_key, plain)
+
+    if result is None:
+        raise TTSError(f"Murf rejected the request: {rejected}")
+
+    if encoded := result.get("encodedAudio"):
+        return encoded
+
+    # Older accounts may still answer with a URL instead.
+    audio_url = result.get("audioFile")
+    if not audio_url:
+        raise TTSError("Murf returned no audio.")
+
     timeout = aiohttp.ClientTimeout(total=TTS_TIMEOUT)
-    payload = {"text": text, "voiceId": voice_id, "format": "MP3"}
+    async with session.get(audio_url, timeout=timeout) as response:
+        if response.status != 200:
+            raise TTSError("Could not download the generated audio.")
+        return base64.b64encode(await response.read()).decode("ascii")
+
+
+async def _post(
+    session: aiohttp.ClientSession, api_key: str, payload: dict
+) -> tuple[Optional[dict], Optional[str]]:
+    """Returns (result, None) on success, or (None, detail) on a 400."""
+    timeout = aiohttp.ClientTimeout(total=TTS_TIMEOUT)
     headers = {"api-key": api_key, "Content-Type": "application/json"}
 
     async with session.post(
         MURF_TTS_URL, json=payload, headers=headers, timeout=timeout
     ) as response:
+        if response.status == 400:
+            return None, (await response.text())[:200]
         if response.status != 200:
-            detail = (await response.text())[:300]
+            detail = (await response.text())[:200]
             logger.error("Murf %s: %s", response.status, detail)
             raise TTSError(_explain(response.status))
-        result = await response.json()
-
-    audio_url = result.get("audioFile")
-    if not audio_url:
-        raise TTSError("Murf returned no audio.")
-
-    async with session.get(audio_url, timeout=timeout) as audio_response:
-        if audio_response.status != 200:
-            raise TTSError("Could not download the generated audio.")
-        blob = await audio_response.read()
-
-    return base64.b64encode(blob).decode("ascii")
+        return await response.json(), None
 
 
 async def stream_speech(
     session: aiohttp.ClientSession,
     api_key: str,
     text_stream: AsyncIterable[str],
-    voice_id: str,
+    voice_id: str = VOICE_ID,
 ) -> AsyncGenerator[str, None]:
     """Yield base64 MP3 chunks, in order, as the text arrives.
 

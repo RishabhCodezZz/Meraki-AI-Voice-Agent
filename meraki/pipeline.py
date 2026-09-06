@@ -31,15 +31,11 @@ class TurnPipeline:
         http: aiohttp.ClientSession,
         keys: ApiKeys,
         conversation: Conversation,
-        model: str,
-        voice_id: str,
     ) -> None:
         self._send = send
         self._http = http
         self._keys = keys
         self._convo = conversation
-        self._model = model
-        self._voice_id = voice_id
 
     async def run(self, user_text: str) -> None:
         self._convo.add("user", user_text)
@@ -52,7 +48,7 @@ class TurnPipeline:
             async def tee() -> AsyncGenerator[str, None]:
                 """Forward tokens to the browser and on to synthesis."""
                 async for token in llm.stream_reply(
-                    self._http, self._keys.ollama, self._model, history, user_text
+                    self._http, self._keys.ollama, history, user_text
                 ):
                     reply_parts.append(token)
                     await self._send(protocol.reply_chunk(token))
@@ -60,7 +56,7 @@ class TurnPipeline:
 
             seq = 0
             async for audio_b64 in tts.stream_speech(
-                self._http, self._keys.murf, tee(), self._voice_id
+                self._http, self._keys.murf, tee()
             ):
                 await self._send(protocol.audio(seq, audio_b64))
                 seq += 1
