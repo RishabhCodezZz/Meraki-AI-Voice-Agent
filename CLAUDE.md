@@ -82,8 +82,12 @@ use with `preview_start`.
   hangs `startRecording` with the mic button stuck disabled - that was a real
   regression, fixed and covered by the smoke script.
 - **TTS chunk thresholds are floors, not targets.** `FIRST_CHUNK_MIN_CHARS` (12)
-  is where we *start looking* for a sentence boundary, so a short opener ships
+  is where we *start looking* for a boundary, so a short opener ships
   immediately. Raising it directly increases time-to-first-audio.
+- **Only the first chunk cuts on a clause** (`allow_clause`). The persona asks
+  for one-sentence replies, so a sentence-only rule meant the single boundary
+  was at the very end and pipelining never engaged. Measured 4.0s → 3.2s to
+  first audio. Do not "tidy" this into a uniform rule.
 
 ## 5. Conventions
 
@@ -165,6 +169,20 @@ The original was a single 590-line `app.py` plus one 390-line HTML file. Audited
   that costs a sentence gets cut. If replies start getting long, that line in
   `SYSTEM_PROMPT` is the first thing to check.
 
+## 8. Verified against live APIs (2026-09-07)
+
+Not inferred - actually run:
+
+- Deepgram transcribed a 3.3s sample word-perfect, and `speech_final` fires once
+  trailing silence arrives. Without trailing silence it never fires, and since a
+  turn only starts on `speech_final`, a client that stops sending audio the
+  instant the user stops talking would hang. The mic streams continuously, so
+  this holds - but it is worth knowing.
+- Ollama replied in 207ms with the persona intact (one sentence, no preamble).
+- Murf returned inline base64 with `Conversational` at 24kHz, confirming
+  `encodeAsBase64` works and removing the download round trip.
+- A full `TurnPipeline` run: 0.6s to first token, 3.2s to first audio.
+
 ## 8. Open items
 
 - Murf REST is called once per chunk. If Murf's WebSocket streaming API is
@@ -179,6 +197,9 @@ The original was a single 590-line `app.py` plus one 390-line HTML file. Audited
 ## 9. Changelog
 
 - **2026-09-06** — Audited the original. 3 P0, 7 P1, 17 P2 defects documented.
+- **2026-09-07** — Verified the whole pipeline against live keys. First chunk
+  now cuts on clauses (4.0s → 3.2s to first audio). Adopted FastAPI's lifespan
+  handler, removing 4 deprecation warnings from every test run.
 - **2026-09-07** — Echo rejection: the assistant no longer interrupts itself on
   speakers. Removed the unused mic-mute plumbing that approach made redundant.
 - **2026-09-07** — Keys moved to the environment; settings dialog and all

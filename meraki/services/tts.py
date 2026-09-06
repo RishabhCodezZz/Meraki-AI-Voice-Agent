@@ -63,7 +63,7 @@ async def chunk_stream(text_stream: AsyncIterable[str]) -> AsyncGenerator[str, N
         buffer += token
         while True:
             threshold = FIRST_CHUNK_MIN_CHARS if is_first else CHUNK_MIN_CHARS
-            cut = _find_cut(buffer, threshold)
+            cut = _find_cut(buffer, threshold, allow_clause=is_first)
             if cut is None:
                 break
             chunk, buffer = buffer[:cut].strip(), buffer[cut:]
@@ -76,7 +76,9 @@ async def chunk_stream(text_stream: AsyncIterable[str]) -> AsyncGenerator[str, N
         yield tail
 
 
-def _find_cut(buffer: str, threshold: int) -> Optional[int]:
+def _find_cut(
+    buffer: str, threshold: int, *, allow_clause: bool = False
+) -> Optional[int]:
     """Index to split ``buffer`` at, or None to keep accumulating."""
     if len(buffer) < threshold:
         return None
@@ -86,6 +88,14 @@ def _find_cut(buffer: str, threshold: int) -> Optional[int]:
     for match in _SENTENCE_END.finditer(window):
         if match.end() >= threshold:
             return match.end()
+
+    if allow_clause:
+        # Only the first chunk cuts this eagerly. Most replies here are a single
+        # sentence, so waiting for a full stop means waiting for the whole reply
+        # and pipelining buys nothing - the comma is what gets audio started.
+        for match in _CLAUSE_END.finditer(window):
+            if match.end() >= threshold:
+                return match.end()
 
     if len(buffer) >= CHUNK_MAX_CHARS:
         for match in _CLAUSE_END.finditer(window):

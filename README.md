@@ -58,6 +58,7 @@ MURF_API_KEY=
 
 Keys are read from the environment at startup. The browser is never asked for
 them and never sends any — anything a client puts in the handshake is ignored.
+On Render, set the same three as environment variables in the dashboard.
 
 Note that this means whoever opens the page spends *your* credits, which is the
 right trade while developing and the wrong one for a public link. Bring-your-own
@@ -107,6 +108,7 @@ static/js/
 ## Tests
 
 ```bash
+pip install pytest
 python -m pytest tests/ -q
 ```
 
@@ -134,6 +136,22 @@ quiet rather than loud:
   — share the link or reload and the conversation continues. It does not survive
   a server restart.
 - `Space` toggles the mic when nothing else is focused.
+
+## Measured
+
+One turn, end to end, against live APIs:
+
+| | |
+|---|---|
+| First token from the model | ~0.6 s |
+| First audio reaching the browser | ~3.2 s |
+| Transcription accuracy | word-perfect on a clean 3.3 s sample |
+
+Time to first audio is the number that matters, and most of what remains is
+Murf's synthesis of the opening clause. Cutting the first chunk on a comma
+rather than waiting for a full stop took it from 4.0 s to 3.2 s — the replies
+here are usually a single sentence, so waiting for a sentence boundary meant
+waiting for the whole reply and the pipelining bought nothing.
 
 ## Engineering notes
 

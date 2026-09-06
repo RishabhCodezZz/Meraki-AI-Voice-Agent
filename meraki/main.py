@@ -31,10 +31,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("meraki")
 
-app = FastAPI(title=f"{APP_NAME} Voice Agent", version=APP_VERSION)
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
-
 # One connection pool shared by every request; created on startup.
 _http: Optional[aiohttp.ClientSession] = None
 
@@ -66,17 +62,20 @@ def looks_like_echo(heard: str, spoken: str) -> bool:
     return bool(phrase) and phrase in _normalise(spoken)
 
 
-@app.on_event("startup")
-async def _startup() -> None:
+@contextlib.asynccontextmanager
+async def _lifespan(_app: FastAPI):
     global _http
     _http = aiohttp.ClientSession()
     logger.info("%s v%s ready", APP_NAME, APP_VERSION)
+    yield
+    await _http.close()
 
 
-@app.on_event("shutdown")
-async def _shutdown() -> None:
-    if _http is not None:
-        await _http.close()
+app = FastAPI(
+    title=f"{APP_NAME} Voice Agent", version=APP_VERSION, lifespan=_lifespan
+)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
 
 
 # --- HTTP --------------------------------------------------------------------
