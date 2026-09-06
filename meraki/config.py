@@ -99,7 +99,11 @@ say so in a handful of words and move on.
 
 @dataclass(frozen=True)
 class ApiKeys:
-    """Per-connection credentials. Never stored globally.
+    """Server-side credentials, read once from the environment.
+
+    Bring-your-own-key is temporarily off: the browser is not asked for keys and
+    does not send any. Restoring it means bringing back ``from_payload`` and the
+    settings dialog - both are in git history.
 
     Three services, each load-bearing: Deepgram transcribes, Ollama thinks,
     Murf speaks. There is deliberately nothing optional here.
@@ -110,26 +114,18 @@ class ApiKeys:
     murf: str
 
     @classmethod
-    def from_payload(cls, payload: dict) -> "ApiKeys":
-        def pick(*names: str) -> str:
-            for name in names:
-                value = payload.get(name)
-                if value and str(value).strip():
-                    return str(value).strip()
-            return ""
-
+    def from_env(cls) -> "ApiKeys":
         return cls(
-            deepgram=pick("deepgram", "DEEPGRAM_API_KEY")
-            or os.getenv("DEEPGRAM_API_KEY", ""),
-            ollama=pick("ollama", "OLLAMA_API_KEY") or os.getenv("OLLAMA_API_KEY", ""),
-            murf=pick("murf", "MURF_API_KEY") or os.getenv("MURF_API_KEY", ""),
+            deepgram=os.getenv("DEEPGRAM_API_KEY", "").strip(),
+            ollama=os.getenv("OLLAMA_API_KEY", "").strip(),
+            murf=os.getenv("MURF_API_KEY", "").strip(),
         )
 
     def missing(self) -> list[str]:
         """Human-readable names of the keys that are absent."""
         required = {
-            "Deepgram": self.deepgram,
-            "Ollama": self.ollama,
-            "Murf": self.murf,
+            "DEEPGRAM_API_KEY": self.deepgram,
+            "OLLAMA_API_KEY": self.ollama,
+            "MURF_API_KEY": self.murf,
         }
         return [name for name, value in required.items() if not value]

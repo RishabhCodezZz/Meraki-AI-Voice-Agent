@@ -47,9 +47,12 @@ use with `preview_start`.
 
 ## 4. Architecture facts — read before changing anything
 
-- **Keys are per-connection.** They arrive in the opening `config` frame and live
-  only on the `_Connection` instance. There is no module-level key state, and
-  adding any would reintroduce the cross-user leak documented in §6.
+- **Keys come from the environment**, read at handshake via `ApiKeys.from_env()`.
+  Bring-your-own-key is temporarily off while developing; the browser is not
+  asked and any `keys` it sends are ignored. Restoring BYO means bringing back
+  `from_payload` and the settings dialog, both in git history — and it must stay
+  per-connection, never module-level, or the cross-user leak in §6 returns.
+  While BYO is off, every visitor spends the deploy owner's credits.
 - **`ready` means everything is up**, including the Deepgram socket. It is sent
   after STT connects, not during the handshake — otherwise the browser goes and
   asks for microphone permission before we know the STT key is even valid.
@@ -171,6 +174,9 @@ The original was a single 590-line `app.py` plus one 390-line HTML file. Audited
 ## 9. Changelog
 
 - **2026-09-06** — Audited the original. 3 P0, 7 P1, 17 P2 defects documented.
+- **2026-09-07** — Keys moved to the environment; settings dialog and all
+  client-side key handling removed while developing. BYO to return before
+  hosting.
 - **2026-09-06** — Locked model and voice server-side (pickers removed). Murf
   now returns inline base64 at 24 kHz with the Conversational style, cutting a
   round trip per chunk. Fixed a hang where a pre-`ready` fatal error left the

@@ -40,27 +40,30 @@ python run.py
 
 Then open **http://127.0.0.1:8000**.
 
-### Where the keys go
+### Keys
 
-Click **Settings** (top right) → three password fields → **Save**. That is the
-only place you need to paste anything, and the only thing that is configurable.
-The dialog opens by itself on first load.
+Copy `.env.example` to `.env` and fill in three values:
 
-| Field | Get it from | Free tier |
+```
+DEEPGRAM_API_KEY=
+OLLAMA_API_KEY=
+MURF_API_KEY=
+```
+
+| Key | From | Free tier |
 |---|---|---|
 | Deepgram | [console.deepgram.com/signup](https://console.deepgram.com/signup) | $200 credit, roughly 690 hours |
-| Ollama | [ollama.com/settings/keys](https://ollama.com/settings/keys) | covers every model listed below |
+| Ollama | [ollama.com/settings/keys](https://ollama.com/settings/keys) | covers the model below |
 | Murf | [murf.ai](https://murf.ai/api/docs/introduction/overview) | trial credits |
 
-Keys are stored in your browser's `localStorage` and travel only to your own
-WebSocket session. The server holds them on the connection object and nowhere
-else, so two people on the same deployment can never see or spend each other's
-credits.
+Keys are read from the environment at startup. The browser is never asked for
+them and never sends any — anything a client puts in the handshake is ignored.
+
+Note that this means whoever opens the page spends *your* credits, which is the
+right trade while developing and the wrong one for a public link. Bring-your-own
+key is in git history and can come back before this is hosted again.
 
 Press **Start talking** and speak. Interrupt it whenever you like — it stops.
-
-Prefer server-side keys? Copy `.env.example` to `.env` and fill it in; anything
-entered in the UI wins over the file.
 
 ## Model and voice
 

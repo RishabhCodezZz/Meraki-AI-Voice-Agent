@@ -132,42 +132,47 @@ def test_clear_removes_a_session():
 # --- key handling ------------------------------------------------------------
 
 
-def test_keys_are_read_from_the_payload():
-    keys = ApiKeys.from_payload(
-        {"deepgram": "dg", "ollama": "ol", "murf": "mu"}
-    )
-    assert keys.missing() == []
-    assert keys.deepgram == "dg"
+def test_keys_are_read_from_the_environment(monkeypatch):
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "dg")
+    monkeypatch.setenv("OLLAMA_API_KEY", "ol")
+    monkeypatch.setenv("MURF_API_KEY", "mu")
 
+    keys = ApiKeys.from_env()
 
-def test_uppercase_env_style_names_also_work():
-    keys = ApiKeys.from_payload(
-        {"DEEPGRAM_API_KEY": "dg", "OLLAMA_API_KEY": "ol", "MURF_API_KEY": "mu"}
-    )
+    assert (keys.deepgram, keys.ollama, keys.murf) == ("dg", "ol", "mu")
     assert keys.missing() == []
 
 
-def test_missing_keys_are_reported_by_name():
-    keys = ApiKeys.from_payload({"ollama": "ol"})
-    assert set(keys.missing()) == {"Deepgram", "Murf"}
+def test_missing_keys_are_named_as_env_vars(monkeypatch):
+    """The message tells you which variable to set, not a friendly label."""
+    monkeypatch.setenv("OLLAMA_API_KEY", "ol")
+
+    assert set(ApiKeys.from_env().missing()) == {
+        "DEEPGRAM_API_KEY",
+        "MURF_API_KEY",
+    }
 
 
-def test_blank_values_count_as_missing():
-    keys = ApiKeys.from_payload({"deepgram": "   ", "ollama": "ol", "murf": "mu"})
-    assert keys.missing() == ["Deepgram"]
+def test_blank_and_whitespace_values_count_as_missing(monkeypatch):
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "   ")
+    monkeypatch.setenv("OLLAMA_API_KEY", "ol")
+    monkeypatch.setenv("MURF_API_KEY", "mu")
+
+    assert ApiKeys.from_env().missing() == ["DEEPGRAM_API_KEY"]
 
 
-def test_env_fallback_fills_absent_keys(monkeypatch):
-    monkeypatch.setenv("DEEPGRAM_API_KEY", "from-env")
-    keys = ApiKeys.from_payload({"ollama": "ol", "murf": "mu"})
-    assert keys.deepgram == "from-env"
-    assert keys.missing() == []
+def test_surrounding_whitespace_is_stripped(monkeypatch):
+    """Pasting into a .env commonly leaves a trailing space."""
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "  dg  ")
+    monkeypatch.setenv("OLLAMA_API_KEY", "ol")
+    monkeypatch.setenv("MURF_API_KEY", "mu")
+
+    assert ApiKeys.from_env().deepgram == "dg"
 
 
-def test_payload_wins_over_env(monkeypatch):
-    monkeypatch.setenv("MURF_API_KEY", "from-env")
-    keys = ApiKeys.from_payload({"deepgram": "dg", "ollama": "ol", "murf": "explicit"})
-    assert keys.murf == "explicit"
+def test_the_browser_cannot_supply_keys():
+    """Bring-your-own-key is off; there must be no payload path back in."""
+    assert not hasattr(ApiKeys, "from_payload")
 
 
 # --- protocol ----------------------------------------------------------------

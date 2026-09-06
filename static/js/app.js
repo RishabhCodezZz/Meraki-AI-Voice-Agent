@@ -2,10 +2,6 @@ import { MicCapture } from './audio-capture.js';
 import { SpeechPlayer } from './audio-player.js';
 import { Visualizer } from './visualizer.js';
 
-const KEY_FIELDS = ['deepgram', 'ollama', 'murf'];
-const REQUIRED = KEY_FIELDS;
-const STORAGE_KEYS = 'meraki.keys';
-
 const el = (id) => document.getElementById(id);
 
 const ui = {
@@ -20,10 +16,6 @@ const ui = {
   liveReply: el('live-reply'),
   transcript: el('transcript'),
   empty: el('empty'),
-  settings: el('settings'),
-  settingsForm: el('settings-form'),
-  settingsBtn: el('settings-btn'),
-  closeSettings: el('close-settings'),
   clearBtn: el('clear-btn'),
   toasts: el('toasts'),
 };
@@ -48,29 +40,6 @@ function sessionId() {
     history.replaceState({}, '', url);
   }
   return id;
-}
-
-// --- keys --------------------------------------------------------------------
-
-function loadKeys() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEYS)) || {};
-  } catch {
-    return {};
-  }
-}
-
-function saveKeys(keys) {
-  try {
-    localStorage.setItem(STORAGE_KEYS, JSON.stringify(keys));
-  } catch {
-    toast('Could not save keys in this browser.', 'error');
-  }
-}
-
-function missingKeys() {
-  const keys = loadKeys();
-  return REQUIRED.filter((name) => !keys[name]);
 }
 
 // --- chrome ------------------------------------------------------------------
@@ -185,7 +154,6 @@ function connect() {
         JSON.stringify({
           type: 'config',
           session_id: sessionId(),
-          keys: loadKeys(),
         })
       );
     };
@@ -278,13 +246,6 @@ function handleMessage(message) {
 // --- recording ---------------------------------------------------------------
 
 async function startRecording() {
-  const missing = missingKeys();
-  if (missing.length) {
-    toast('Add your API keys to get started.', 'error');
-    openSettings();
-    return;
-  }
-
   setState('connecting', 'Connecting');
   ui.micBtn.disabled = true;
 
@@ -353,42 +314,9 @@ function toggleRecording() {
   else startRecording();
 }
 
-// --- settings ----------------------------------------------------------------
-
-function openSettings() {
-  const keys = loadKeys();
-  KEY_FIELDS.forEach((name) => {
-    const field = el(`key-${name}`);
-    if (field) field.value = keys[name] || '';
-  });
-  ui.settings.showModal();
-}
-
-function submitSettings(event) {
-  event.preventDefault();
-  const keys = {};
-  KEY_FIELDS.forEach((name) => {
-    const value = el(`key-${name}`).value.trim();
-    if (value) keys[name] = value;
-  });
-
-  const missing = REQUIRED.filter((name) => !keys[name]);
-  if (missing.length) {
-    toast('Deepgram, Ollama and Murf keys are all required.', 'error');
-    return;
-  }
-
-  saveKeys(keys);
-  ui.settings.close();
-  toast('Keys saved on this device.');
-}
-
 // --- boot --------------------------------------------------------------------
 
 ui.micBtn.addEventListener('click', toggleRecording);
-ui.settingsBtn.addEventListener('click', openSettings);
-ui.closeSettings.addEventListener('click', () => ui.settings.close());
-ui.settingsForm.addEventListener('submit', submitSettings);
 ui.clearBtn.addEventListener('click', clearHistory);
 
 document.addEventListener('keydown', (event) => {
@@ -405,4 +333,3 @@ window.addEventListener('beforeunload', () => {
 sessionId();
 loadHistory();
 setState('idle', 'Ready');
-if (missingKeys().length) openSettings();

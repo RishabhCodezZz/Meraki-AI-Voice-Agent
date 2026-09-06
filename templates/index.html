@@ -30,13 +30,6 @@
         <span id="status-dot" class="status__dot" data-state="idle" aria-hidden="true"></span>
         <span id="status">Ready</span>
       </p>
-      <button id="settings-btn" class="ghost" type="button" aria-label="Settings">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
-          <circle cx="12" cy="12" r="3.2" />
-          <path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" />
-        </svg>
-        <span>Settings</span>
-      </button>
     </div>
   </header>
 
@@ -77,45 +70,6 @@
     <span>Voice by <a href="https://murf.ai/api/docs/introduction/overview" target="_blank" rel="noopener noreferrer">Murf</a></span>
   </footer>
 
-  <dialog id="settings" class="sheet">
-    <form id="settings-form" method="dialog" class="sheet__form">
-      <div class="sheet__head">
-        <h2>Setup</h2>
-        <button id="close-settings" class="ghost ghost--sm" type="button" aria-label="Close">Close</button>
-      </div>
-
-      <p class="sheet__note">
-        Keys are kept in this browser and sent only to your own session. They are
-        never stored on the server.
-      </p>
-
-      <label class="field">
-        <span class="field__label">Deepgram <em>speech to text</em></span>
-        <input id="key-deepgram" type="password" autocomplete="off" spellcheck="false" placeholder="Required" />
-        <a class="field__get" href="https://console.deepgram.com/signup" target="_blank" rel="noopener noreferrer">Get a key</a>
-      </label>
-
-      <label class="field">
-        <span class="field__label">Ollama <em>language model</em></span>
-        <input id="key-ollama" type="password" autocomplete="off" spellcheck="false" placeholder="Required" />
-        <a class="field__get" href="https://ollama.com/settings/keys" target="_blank" rel="noopener noreferrer">Get a key</a>
-      </label>
-
-      <label class="field">
-        <span class="field__label">Murf <em>text to speech</em></span>
-        <input id="key-murf" type="password" autocomplete="off" spellcheck="false" placeholder="Required" />
-        <a class="field__get" href="https://murf.ai/api/docs/introduction/overview" target="_blank" rel="noopener noreferrer">Get a key</a>
-      </label>
-
-
-
-      <p class="sheet__hint">
-        Nothing else to configure. The model and voice are set by the app.
-      </p>
-
-      <button type="submit" class="primary">Save</button>
-    </form>
-  </dialog>
 
   <div id="toasts" class="toasts" aria-live="assertive"></div>
 

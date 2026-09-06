@@ -159,19 +159,17 @@ class _Connection:
             )
             return False
 
-        keys = ApiKeys.from_payload(message.get("keys") or {})
-        missing = keys.missing()
-        if missing:
+        self._keys = ApiKeys.from_env()
+        if missing := self._keys.missing():
             await self._send(
                 protocol.error(
                     "keys",
-                    f"Missing API key(s): {', '.join(missing)}.",
+                    f"Server is missing {', '.join(missing)} in its environment.",
                     fatal=True,
                 )
             )
             return False
 
-        self._keys = keys
         self._session_id = str(message.get("session_id") or "").strip() or "anonymous"
         # Model and voice are server-side settings. Anything the browser sends
         # for them is ignored on purpose.
