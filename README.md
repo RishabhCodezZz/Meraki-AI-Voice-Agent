@@ -32,6 +32,8 @@ to you instead.
 ## Running it
 
 ```bash
+git clone https://github.com/RishabhCodezZz/Meraki-AI-Voice-Agent.git
+cd Meraki-AI-Voice-Agent
 pip install -r requirements.txt
 python run.py
 ```
