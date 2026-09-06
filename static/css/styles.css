@@ -10,8 +10,10 @@
   --text: #f2f2f4;
   --text-dim: #9a9aa4;
   --text-faint: #62626d;
-  --accent: #f5a524;
-  --accent-soft: rgba(245, 165, 36, 0.14);
+  --accent: #e8434a;
+  --accent-strong: #d1232c;
+  --on-accent: #ffffff;
+  --accent-soft: rgba(232, 67, 74, 0.15);
   --bar-idle: #2a2a31;
   --danger: #ff6b5e;
 
@@ -76,11 +78,22 @@ body[data-state="thinking"]::before { opacity: 0.55; }
 .brand { display: flex; align-items: center; gap: 10px; }
 
 .brand__mark {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft);
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.brand__mark svg { display: block; }
+
+.brand__text { display: flex; flex-direction: column; line-height: 1.15; }
+
+.brand__tag {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  letter-spacing: 0.01em;
 }
 
 .brand__name {
@@ -142,8 +155,8 @@ body[data-state="thinking"]::before { opacity: 0.55; }
   padding: 11px 16px;
   border: 0;
   border-radius: 10px;
-  background: var(--accent);
-  color: #1a1205;
+  background: var(--accent-strong);
+  color: var(--on-accent);
   font: inherit;
   font-weight: 600;
   font-size: 14px;
@@ -225,9 +238,9 @@ body[data-state="thinking"]::before { opacity: 0.55; }
 .mic:disabled { opacity: 0.55; cursor: progress; }
 
 .mic[data-active="true"] {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #1a1205;
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  color: var(--on-accent);
 }
 
 .mic__ring {

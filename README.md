@@ -1,7 +1,12 @@
 # Meraki
 
-A real-time voice agent. You talk, it thinks, it talks back — with audio starting
-before the model has finished its sentence.
+Your friendly neighbourhood AI — a real-time voice agent that talks back before
+it has finished thinking.
+
+Meraki has the temperament of a certain web-slinger: quick, warm, a bit of a
+smart-arse, and completely serious the second it actually matters. The persona
+is tuned for speech, so the wit lives in word choice rather than word count — if
+a joke costs a whole sentence, the prompt tells it to cut the joke.
 
 ```
 mic ──► PCM16 @16kHz ──► Deepgram Nova-3 ──► Ollama Cloud ──► Murf ──► speakers
@@ -31,20 +36,28 @@ pip install -r requirements.txt
 python run.py
 ```
 
-Open http://127.0.0.1:8000 and add three keys in Setup.
+Then open **http://127.0.0.1:8000**.
 
-| Service | Does | Free tier |
+### Where the keys go
+
+Click **Settings** (top right) → three password fields → **Save**. That is the
+only place you need to paste anything. The dialog opens by itself on first load.
+
+| Field | Get it from | Free tier |
 |---|---|---|
-| [Deepgram](https://console.deepgram.com/signup) | speech → text | $200 credit (~690 hours) |
-| [Ollama Cloud](https://ollama.com/settings/keys) | the thinking | free tier covers every model below |
-| [Murf](https://murf.ai/api/docs/introduction/overview) | text → speech | trial credits |
+| Deepgram | [console.deepgram.com/signup](https://console.deepgram.com/signup) | $200 credit, roughly 690 hours |
+| Ollama | [ollama.com/settings/keys](https://ollama.com/settings/keys) | covers every model listed below |
+| Murf | [murf.ai](https://murf.ai/api/docs/introduction/overview) | trial credits |
 
-Keys are held in your browser and sent only to your own WebSocket session. The
-server never stores them — two people using the same deployment cannot see or
-spend each other's credits.
+Keys are stored in your browser's `localStorage` and travel only to your own
+WebSocket session. The server holds them on the connection object and nowhere
+else, so two people on the same deployment can never see or spend each other's
+credits.
 
-Prefer server-side keys? Copy `.env.example` to `.env` and fill it in. Anything
-entered in the UI takes precedence.
+Press **Start talking** and speak. Interrupt it whenever you like — it stops.
+
+Prefer server-side keys? Copy `.env.example` to `.env` and fill it in; anything
+entered in the UI wins over the file.
 
 ## Models
 

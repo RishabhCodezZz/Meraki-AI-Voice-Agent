@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 from . import protocol
 from .config import (
     APP_NAME,
+    APP_TAGLINE,
     APP_VERSION,
     AVAILABLE_MODELS,
     AVAILABLE_VOICES,
@@ -68,6 +69,7 @@ async def index(request: Request):
         {
             "request": request,
             "app_name": APP_NAME,
+            "tagline": APP_TAGLINE,
             "version": APP_VERSION,
             "voices": AVAILABLE_VOICES,
             "default_voice": DEFAULT_VOICE_ID,

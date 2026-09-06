@@ -117,8 +117,10 @@ The original was a single 590-line `app.py` plus one 390-line HTML file. Audited
 - The news skill matched any message containing "latest" and then *discarded the
   user's question*, replacing it with a canned instruction. Query hardcoded to
   `q='AI'`. Removed entirely — it was never load-bearing.
-- Spider-Man persona (copyrighted character) whose "witty remarks" instruction
-  fought the "keep it short for voice" instruction.
+- The persona prompt asked for witty remarks *and* 1-2 sentence voice replies
+  with no rule for which wins, so the model padded. It also opened with "What's
+  up doc?", which is Bugs Bunny, not Spider-Man. The persona is back by request
+  (see §7); the conflict is now resolved explicitly in the prompt.
 - README advertised streaming audio, persistent memory and secure key handling.
   None of the three were true.
 
@@ -137,6 +139,11 @@ The original was a single 590-line `app.py` plus one 390-line HTML file. Audited
   upgrade, so the picker labels them that way.
 - **No news/weather/tool APIs.** Every remaining key is load-bearing. Optional
   integrations were the source of the worst prompt bug in the original.
+- **Spider-Man-flavoured persona, kept at the user's request.** The prompt names
+  no character and quotes no dialogue - it describes a temperament. The rule that
+  makes it work on voice is the tie-breaker: form beats personality, and a joke
+  that costs a sentence gets cut. If replies start getting long, that line in
+  `SYSTEM_PROMPT` is the first thing to check.
 
 ## 8. Open items
 
@@ -152,6 +159,9 @@ The original was a single 590-line `app.py` plus one 390-line HTML file. Audited
 ## 9. Changelog
 
 - **2026-09-06** — Audited the original. 3 P0, 7 P1, 17 P2 defects documented.
+- **2026-09-06** — Restored the Spider-Man persona, rewritten so wit and voice
+  brevity no longer conflict. Accent amber → red, spider brand mark, tagline
+  back. White-on-red button contrast checked at 5.3:1 (AA).
 - **2026-09-06** — v3.0.0 rewrite. Renamed to Meraki. Gemini → Ollama Cloud,
   AssemblyAI → Deepgram, NewsAPI removed. Per-connection keys, real pipelined
   TTS, barge-in, AudioWorklet capture, gapless playback, new dark-studio UI,
