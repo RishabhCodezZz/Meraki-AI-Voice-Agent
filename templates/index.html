@@ -2,402 +2,136 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Meraki AI - Your Friendly Neighborhood AI Assistant</title>
-  
-  <!-- Tailwind CSS for utility classes -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  
-  <!-- Google Fonts & Font Awesome for icons -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
-
-  <!-- Link to your new external stylesheet -->
-  <link rel="stylesheet" href="../static/style.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <title>{{ app_name }} — Voice Agent</title>
+  <meta name="description" content="A real-time voice agent: streaming speech recognition, streaming language model, streaming speech synthesis." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>◍</text></svg>" />
+  <link rel="stylesheet" href="/static/css/styles.css" />
 </head>
-<body class="text-gray-200">
-  <!-- Particle background -->
-  <canvas id="particle-canvas"></canvas>
+<body data-state="idle">
 
-  <div class="main-container min-h-screen w-full flex flex-col items-center justify-center p-4 animated-gradient">
-    
-    <!-- Settings Button -->
-    <div class="absolute top-4 right-4 z-20">
-      <button id="settingsBtn" class="btn-custom px-4 py-2 rounded-lg text-white" onclick="toggleSettingsModal()">
-        <i class="fas fa-cog mr-2"></i> Settings
+  <header class="bar">
+    <div class="brand">
+      <span class="brand__mark" aria-hidden="true"></span>
+      <span class="brand__name">{{ app_name }}</span>
+    </div>
+
+    <div class="bar__right">
+      <p class="status">
+        <span id="status-dot" class="status__dot" data-state="idle" aria-hidden="true"></span>
+        <span id="status">Ready</span>
+      </p>
+      <button id="settings-btn" class="ghost" type="button" aria-label="Settings">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+          <circle cx="12" cy="12" r="3.2" />
+          <path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" />
+        </svg>
+        <span>Settings</span>
       </button>
     </div>
+  </header>
 
-    <!-- Main AI Interaction Card -->
-    <div class="w-full max-w-2xl bg-black bg-opacity-40 backdrop-blur-lg rounded-2xl shadow-2xl p-6 md:p-8 border border-white/10">
-      
-      <!-- Header -->
-      <div class="text-center mb-6">
-        <h1 class="text-4xl font-bold text-white">
-          <i class="fa-solid fa-spider text-red-500"></i> Meraki AI
-        </h1>
-        <p class="text-red-400">Your Friendly Neighborhood AI Assistant</p>
-      </div>
+  <main class="stage">
 
-      <!-- AI Orb -->
-      <div class="flex justify-center mb-6">
-        <div id="recordToggle" class="orb-container" onclick="toggleRecording()">
-          <div id="orb" class="orb idle">
-            <div class="orb-glow"></div>
-            <i id="orb-icon" class="orb-icon fa-solid fa-microphone"></i>
-          </div>
-        </div>
-      </div>
+    <canvas id="meter" class="meter" aria-hidden="true"></canvas>
 
-      <!-- Status & Transcript Display -->
-      <div class="text-center h-12 mb-4 transition-all duration-300 flex flex-col justify-center items-center">
-        <div id="uploadStatus" class="text-gray-400">Click the orb to start talking</div>
-        <div id="userTranscript" class="text-blue-300 font-medium italic mt-1"></div>
-      </div>
+    <section id="live" class="live" aria-live="polite" hidden>
+      <p id="live-user" class="live__user"></p>
+      <p id="live-reply" class="live__reply"></p>
+    </section>
 
-      <!-- Chat History -->
-      <div id="chatHistoryCard" class="bg-black bg-opacity-30 rounded-xl p-4 border border-white/10" style="display: none;">
-        <div class="flex justify-between items-center mb-3">
-          <h3 class="font-semibold text-lg text-white">Conversation</h3>
-          <button class="btn-custom text-xs px-3 py-1 rounded-lg" onclick="clearHistory()">
-            <i class="fas fa-broom mr-1"></i> Clear
-          </button>
-        </div>
-        <div id="historyList" class="chat-history-list max-h-64 overflow-y-auto space-y-4 pr-2">
-          <!-- Chat messages will be injected here by JavaScript -->
-        </div>
-      </div>
+    <div class="controls">
+      <button id="mic-btn" class="mic" type="button" data-active="false">
+        <span class="mic__ring" aria-hidden="true"></span>
+        <svg class="mic__icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <rect x="9" y="2.5" width="6" height="11" rx="3" />
+          <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" />
+        </svg>
+        <span id="mic-label">Start talking</span>
+      </button>
+      <p id="hint" class="hint">Click to start a conversation</p>
     </div>
-    
-    <!-- Footer -->
-    <footer class="text-center mt-6 text-gray-500 text-sm">
-      <p>Meraki AI Streaming Interface v2.0</p>
-    </footer>
+  </main>
 
-    <!-- Murf Branding -->
-    <div class="fixed bottom-4 left-4 z-20">
-      <a href="https://murf.ai/api/docs/introduction/overview" target="_blank" rel="noopener noreferrer" 
-         class="inline-flex items-center px-3 py-2 bg-black bg-opacity-60 backdrop-blur-sm rounded-lg border border-white/10 text-gray-300 hover:text-white hover:bg-opacity-80 transition-all duration-300 text-sm group">
-        <i class="fas fa-volume-up mr-2 text-purple-400"></i>
-        <span>Powered by <span class="font-semibold text-purple-400 group-hover:text-purple-300">Murf</span></span>
-        <i class="fas fa-external-link-alt ml-2 opacity-50 group-hover:opacity-100"></i>
-      </a>
+  <section class="log">
+    <div class="log__head">
+      <h2>Conversation</h2>
+      <button id="clear-btn" class="ghost ghost--sm" type="button">Clear</button>
     </div>
-  </div>
+    <div id="transcript" class="log__body"></div>
+    <p id="empty" class="log__empty">Nothing yet. Press the button and say something.</p>
+  </section>
 
-  <!-- Settings Modal -->
-  <div id="settingsModal" class="fixed inset-0 bg-black bg-opacity-70 backdrop-blur-sm flex items-center justify-center p-4 z-50 hidden">
-    <div class="bg-gray-900 border border-white/10 rounded-2xl shadow-2xl w-full max-w-md p-6">
-      <div class="flex justify-between items-center mb-4">
-        <h2 class="text-2xl font-bold text-white">API Key Configuration</h2>
-        <button class="text-gray-400 hover:text-white" onclick="toggleSettingsModal()"><i class="fas fa-times"></i></button>
+  <footer class="foot">
+    <span>Speech by Deepgram</span><i></i>
+    <span>Thinking by Ollama</span><i></i>
+    <span>Voice by <a href="https://murf.ai/api/docs/introduction/overview" target="_blank" rel="noopener noreferrer">Murf</a></span>
+  </footer>
+
+  <dialog id="settings" class="sheet">
+    <form id="settings-form" method="dialog" class="sheet__form">
+      <div class="sheet__head">
+        <h2>Setup</h2>
+        <button id="close-settings" class="ghost ghost--sm" type="button" aria-label="Close">Close</button>
       </div>
-      <p class="text-gray-400 mb-6 text-sm">
-        Enter your API keys below. All fields are required.
+
+      <p class="sheet__note">
+        Keys are kept in this browser and sent only to your own session. They are
+        never stored on the server.
       </p>
-      <form id="apiKeysForm" class="space-y-4">
-        <div>
-          <label for="assemblyai_key" class="block text-sm font-medium text-gray-300 mb-1">AssemblyAI API Key</label>
-          <input type="password" id="assemblyai_key" name="ASSEMBLYAI_API_KEY" class="w-full bg-gray-800 border border-gray-700 text-white rounded-lg p-2 focus:ring-2 focus:ring-red-500 focus:outline-none" placeholder="Enter AssemblyAI Key" required>
-        </div>
-        <div>
-          <label for="gemini_key" class="block text-sm font-medium text-gray-300 mb-1">Google Gemini API Key</label>
-          <input type="password" id="gemini_key" name="GEMINI_API_KEY" class="w-full bg-gray-800 border border-gray-700 text-white rounded-lg p-2 focus:ring-2 focus:ring-red-500 focus:outline-none" placeholder="Enter Gemini Key" required>
-        </div>
-        <div>
-          <label for="murf_key" class="block text-sm font-medium text-gray-300 mb-1">Murf AI API Key</label>
-          <input type="password" id="murf_key" name="MURF_API_KEY" class="w-full bg-gray-800 border border-gray-700 text-white rounded-lg p-2 focus:ring-2 focus:ring-red-500 focus:outline-none" placeholder="Enter Murf AI Key" required>
-        </div>
-        <div>
-          <label for="newsapi_key" class="block text-sm font-medium text-gray-300 mb-1">NewsAPI Key</label>
-          <input type="password" id="newsapi_key" name="NEWS_API_KEY" class="w-full bg-gray-800 border border-gray-700 text-white rounded-lg p-2 focus:ring-2 focus:ring-red-500 focus:outline-none" placeholder="Enter NewsAPI Key" required>
-        </div>
-        <div class="flex justify-end pt-4">
-          <button type="submit" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition-colors">
-            Save Keys
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
 
+      <label class="field">
+        <span class="field__label">Deepgram <em>speech to text</em></span>
+        <input id="key-deepgram" type="password" autocomplete="off" spellcheck="false" placeholder="Required" />
+        <a class="field__get" href="https://console.deepgram.com/signup" target="_blank" rel="noopener noreferrer">Get a key</a>
+      </label>
 
-  <script>
-    // --- Particle Background Animation (omitted for brevity, no changes here) ---
-    const canvas = document.getElementById('particle-canvas');
-    const ctx = canvas.getContext('2d');
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    let particlesArray;
-    class Particle { constructor(x, y, directionX, directionY, size, color) { this.x = x; this.y = y; this.directionX = directionX; this.directionY = directionY; this.size = size; this.color = color; } draw() { ctx.beginPath(); ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2, false); ctx.fillStyle = 'rgba(233, 69, 96, 0.5)'; ctx.fill(); } update() { if (this.x > canvas.width || this.x < 0) { this.directionX = -this.directionX; } if (this.y > canvas.height || this.y < 0) { this.directionY = -this.directionY; } this.x += this.directionX; this.y += this.directionY; this.draw(); } }
-    function initParticles() { particlesArray = []; let numberOfParticles = (canvas.height * canvas.width) / 9000; for (let i = 0; i < numberOfParticles; i++) { let size = (Math.random() * 2) + 1; let x = (Math.random() * ((innerWidth - size * 2) - (size * 2)) + size * 2); let y = (Math.random() * ((innerHeight - size * 2) - (size * 2)) + size * 2); let directionX = (Math.random() * .4) - .2; let directionY = (Math.random() * .4) - .2; particlesArray.push(new Particle(x, y, directionX, directionY, size)); } }
-    function animateParticles() { requestAnimationFrame(animateParticles); ctx.clearRect(0, 0, innerWidth, innerHeight); for (let i = 0; i < particlesArray.length; i++) { particlesArray[i].update(); } }
-    window.addEventListener('resize', () => { canvas.width = innerWidth; canvas.height = innerHeight; initParticles(); });
-    initParticles();
-    animateParticles();
+      <label class="field">
+        <span class="field__label">Ollama <em>language model</em></span>
+        <input id="key-ollama" type="password" autocomplete="off" spellcheck="false" placeholder="Required" />
+        <a class="field__get" href="https://ollama.com/settings/keys" target="_blank" rel="noopener noreferrer">Get a key</a>
+      </label>
 
-    // --- Application Logic ---
-    
-    const settingsModal = document.getElementById('settingsModal');
-    const apiKeysForm = document.getElementById('apiKeysForm');
+      <label class="field">
+        <span class="field__label">Murf <em>text to speech</em></span>
+        <input id="key-murf" type="password" autocomplete="off" spellcheck="false" placeholder="Required" />
+        <a class="field__get" href="https://murf.ai/api/docs/introduction/overview" target="_blank" rel="noopener noreferrer">Get a key</a>
+      </label>
 
-    function toggleSettingsModal() {
-      settingsModal.classList.toggle('hidden');
-    }
+      <div class="row">
+        <label class="field field--select">
+          <span class="field__label">Model</span>
+          <select id="model">
+            {% for model in models %}
+            <option value="{{ model.id }}" {% if model.id == default_model %}selected{% endif %}>
+              {{ model.label }} — {{ model.note }}
+            </option>
+            {% endfor %}
+          </select>
+        </label>
 
-    function loadApiKeys() {
-      const keys = JSON.parse(localStorage.getItem('apiKeys')) || {};
-      document.getElementById('assemblyai_key').value = keys.ASSEMBLYAI_API_KEY || '';
-      document.getElementById('gemini_key').value = keys.GEMINI_API_KEY || '';
-      document.getElementById('murf_key').value = keys.MURF_API_KEY || '';
-      document.getElementById('newsapi_key').value = keys.NEWS_API_KEY || '';
-    }
+        <label class="field field--select">
+          <span class="field__label">Voice</span>
+          <select id="voice">
+            {% for voice in voices %}
+            <option value="{{ voice.id }}" {% if voice.id == default_voice %}selected{% endif %}>{{ voice.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
 
-    async function saveApiKeys(event) {
-      event.preventDefault();
-      const formData = new FormData(apiKeysForm);
-      const keys = Object.fromEntries(formData.entries());
+      <p class="sheet__hint">
+        Ollama's free tier covers every model listed. Smaller models reply sooner,
+        which matters more in conversation than it does in chat.
+      </p>
 
-      localStorage.setItem('apiKeys', JSON.stringify(keys));
+      <button type="submit" class="primary">Save</button>
+    </form>
+  </dialog>
 
-      try {
-        const response = await fetch('/api/keys', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(keys),
-        });
-        if (!response.ok) throw new Error('Failed to save keys');
-        alert('API keys saved successfully!');
-        toggleSettingsModal();
-      } catch (error) {
-        console.error('Error saving API keys:', error);
-        alert('Error saving API keys. See console for details.');
-      }
-    }
+  <div id="toasts" class="toasts" aria-live="assertive"></div>
 
-    apiKeysForm.addEventListener('submit', saveApiKeys);
-    
-    function getOrCreateSessionId() {
-      const url = new URL(window.location.href);
-      let session = url.searchParams.get('session');
-      if (!session) {
-        session = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(36).slice(2);
-        url.searchParams.set('session', session);
-        window.history.replaceState({}, '', url.toString());
-      }
-      return session;
-    }
-
-    let micStream;
-    let isRecording = false;
-    let ws;
-    let audioChunksBuffer = [];
-
-    const orb = document.getElementById('orb');
-    const orbIcon = document.getElementById('orb-icon');
-    const statusEl = document.getElementById('uploadStatus');
-    const transcriptEl = document.getElementById('userTranscript');
-
-    function setOrbState(state) {
-        orb.className = `orb ${state}`;
-        switch(state) {
-            case 'idle': orbIcon.className = 'orb-icon fa-solid fa-microphone'; break;
-            case 'listening': orbIcon.className = 'orb-icon fa-solid fa-wave-square'; break;
-            case 'processing': orbIcon.className = 'orb-icon fa-solid fa-spinner fa-spin'; break;
-            case 'speaking': orbIcon.className = 'orb-icon fa-solid fa-comment-dots'; break;
-        }
-    }
-
-    async function toggleRecording() {
-      if (!isRecording) {
-        try {
-          const keys = JSON.parse(localStorage.getItem('apiKeys')) || {};
-          if (!keys.ASSEMBLYAI_API_KEY || !keys.GEMINI_API_KEY || !keys.MURF_API_KEY || !keys.NEWS_API_KEY) {
-            alert('Please set all your API keys in the Settings menu first!');
-            toggleSettingsModal();
-            return;
-          }
-
-          setOrbState('listening');
-          statusEl.textContent = "I'm all ears...";
-          transcriptEl.textContent = "";
-          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-          const wsUrl = `wss://${window.location.host}/ws/audio`;
-          ws = new WebSocket(wsUrl);
-
-          ws.binaryType = 'arraybuffer';
-          ws.onmessage = (ev) => {
-            try {
-              let message = JSON.parse(ev.data);
-              if (message.type === 'transcript' && message.is_final && message.text.trim()) {
-                statusEl.textContent = 'Got it! Thinking...';
-                transcriptEl.textContent = `You said: "${message.text}"`;
-                setOrbState('processing');
-              } else if (message.type === 'llm_start') {
-                setOrbState('processing');
-                statusEl.textContent = 'Generating response...';
-              } else if (message.type === 'llm_complete') {
-                setOrbState('speaking');
-                statusEl.textContent = 'Here is my response!';
-                setTimeout(() => refreshHistory(), 500);
-              } else if (message.type === 'audio_chunk' && message.audio_base64) {
-                setOrbState('speaking');
-                audioChunksBuffer.push(message.audio_base64);
-                playAudioFromBase64(message.audio_base64);
-              } else if (message.type === 'llm_error' || message.type === 'error') {
-                statusEl.textContent = `❌ ${message.message}`;
-                setOrbState('idle');
-              }
-            } catch (e) { console.error('Error processing WebSocket message:', e); }
-          };
-          const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
-          const source = audioCtx.createMediaStreamSource(micStream);
-          const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-          const TARGET_SR = 16000;
-          const floatTo16BitPCM = (input) => {
-            const output = new Int16Array(input.length);
-            for (let i = 0; i < input.length; i++) {
-              let s = Math.max(-1, Math.min(1, input[i]));
-              output[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-            }
-            return output;
-          };
-          const downsample = (buffer, inSR, outSR) => {
-            if (outSR === inSR) return buffer;
-            const ratio = inSR / outSR;
-            const newLength = Math.round(buffer.length / ratio);
-            const result = new Float32Array(newLength);
-            let offsetResult = 0, offsetBuffer = 0;
-            while (offsetResult < result.length) {
-              const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
-              let accum = 0, count = 0;
-              for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
-                accum += buffer[i];
-                count++;
-              }
-              result[offsetResult] = accum / (count || 1);
-              offsetResult++;
-              offsetBuffer = nextOffsetBuffer;
-            }
-            return result;
-          };
-          processor.onaudioprocess = (e) => {
-            if (!ws || ws.readyState !== WebSocket.OPEN) return;
-            const input = e.inputBuffer.getChannelData(0);
-            const ds = downsample(input, audioCtx.sampleRate, TARGET_SR);
-            const pcm16 = floatTo16BitPCM(ds);
-            ws.send(pcm16.buffer);
-          };
-          source.connect(processor);
-          processor.connect(audioCtx.destination);
-          isRecording = true;
-        } catch (error) {
-          statusEl.textContent = 'Microphone access denied.';
-          setOrbState('idle');
-          isRecording = false;
-        }
-      } else {
-        if (ws && ws.readyState === WebSocket.OPEN) { ws.send('EOF'); }
-        if (ws) ws.close();
-        if (micStream) micStream.getTracks().forEach(t => t.stop());
-        isRecording = false;
-        setOrbState('idle');
-        statusEl.textContent = 'Click the orb to start talking';
-        transcriptEl.textContent = '';
-      }
-    }
-    
-    let audioQueue = [];
-    let isPlaying = false;
-    
-    function playAudioFromBase64(base64String) {
-        try {
-            const binaryString = atob(base64String);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-            const blob = new Blob([bytes], { type: 'audio/mp3' });
-            const audioUrl = URL.createObjectURL(blob);
-            const audio = new Audio(audioUrl);
-            audioQueue.push(audio);
-            if (!isPlaying) playNextInQueue();
-        } catch (e) { console.error("Error decoding or playing audio:", e); }
-    }
-
-    function playNextInQueue() {
-        if (audioQueue.length > 0) {
-            isPlaying = true;
-            const audio = audioQueue.shift();
-            audio.play();
-            audio.onended = () => playNextInQueue();
-        } else {
-            isPlaying = false;
-            setOrbState('idle');
-        }
-    }
-
-    function escapeHtml(text) {
-      return text ? text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;') : '';
-    }
-
-    async function refreshHistory() {
-      const sessionId = getOrCreateSessionId();
-      const res = await fetch(`/agent/history/${encodeURIComponent(sessionId)}`);
-      const data = await res.json();
-      const list = document.getElementById('historyList');
-      const card = document.getElementById('chatHistoryCard');
-      if (!data.history || data.history.length === 0) {
-          card.style.display = 'none';
-          return;
-      }
-      card.style.display = 'block';
-      list.innerHTML = '';
-      (data.history || []).forEach(msg => {
-        const isUser = msg.role === 'user';
-        const row = document.createElement('div');
-        row.className = `flex items-start gap-3 ${isUser ? 'justify-end' : ''}`;
-        const avatar = isUser ? '🐧' : '🕷️';
-        const bgColor = isUser ? 'bg-blue-800' : 'bg-red-900 bg-opacity-70';
-        const name = isUser ? 'You' : 'Meraki AI';
-        const align = isUser ? 'items-end' : 'items-start';
-        row.innerHTML = `
-          <div class="text-3xl">${isUser ? '' : avatar}</div>
-          <div class="flex flex-col ${align} max-w-xs md:max-w-md">
-              <div class="px-4 py-2 rounded-2xl ${bgColor} ${isUser ? 'rounded-br-none' : 'rounded-bl-none'}">
-                <p class="text-sm text-white">${escapeHtml(msg.content || '')}</p>
-              </div>
-              <span class="text-xs text-gray-500 mt-1">${name}</span>
-          </div>
-          <div class="text-3xl">${isUser ? avatar : ''}</div>
-        `;
-        list.appendChild(row);
-      });
-      list.scrollTop = list.scrollHeight;
-    }
-
-    async function clearHistory() {
-      const sessionId = getOrCreateSessionId();
-      await fetch(`/agent/history/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
-      await refreshHistory();
-    }
-
-    window.addEventListener('DOMContentLoaded', () => {
-      getOrCreateSessionId();
-      refreshHistory();
-      loadApiKeys();
-      const keys = JSON.parse(localStorage.getItem('apiKeys'));
-      if (keys) {
-        fetch('/api/keys', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(keys),
-        });
-      }
-    });
-  </script>
+  <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

@@ -1,0 +1,197 @@
+"""Tests for the pure logic: chunking, session store, key resolution.
+
+Network-facing code is exercised through fakes rather than live calls, so the
+suite runs offline and without any API keys.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+from meraki.config import CHUNK_MAX_CHARS, ApiKeys
+from meraki.services.tts import chunk_stream
+from meraki.session import SessionStore
+
+
+# --- helpers -----------------------------------------------------------------
+
+
+async def _tokens(text: str, size: int = 7):
+    """Emit text in small pieces, the way a model streams."""
+    for i in range(0, len(text), size):
+        yield text[i : i + size]
+
+
+async def _collect(text: str, size: int = 7) -> list[str]:
+    return [chunk async for chunk in chunk_stream(_tokens(text, size))]
+
+
+def chunks_of(text: str, size: int = 7) -> list[str]:
+    return asyncio.run(_collect(text, size))
+
+
+# --- chunking ----------------------------------------------------------------
+
+
+def test_chunking_preserves_every_character():
+    text = (
+        "Right, here's the thing. Voice agents live or die on latency, "
+        "not on how clever the model is. Keep it short and it feels alive."
+    )
+    joined = " ".join(chunks_of(text))
+    assert joined.split() == text.split()
+
+
+def test_first_chunk_is_short_so_audio_starts_early():
+    text = (
+        "Yes, that works. The trick is to send the first clause to the "
+        "synthesiser before the model has finished the rest of the sentence."
+    )
+    chunks = chunks_of(text)
+    assert len(chunks) > 1
+    # Fast first sound is the whole point of chunking.
+    assert len(chunks[0]) < 120
+
+
+def test_chunks_split_on_sentence_boundaries():
+    chunks = chunks_of("One thing here. Another thing there. A third thing now.")
+    assert chunks[0].endswith(".")
+
+
+def test_no_chunk_exceeds_the_cap_even_without_punctuation():
+    text = "word " * 300
+    for chunk in chunks_of(text):
+        assert len(chunk) <= CHUNK_MAX_CHARS
+
+
+def test_short_reply_emits_one_chunk():
+    assert chunks_of("Sure.") == ["Sure."]
+
+
+def test_empty_stream_emits_nothing():
+    assert chunks_of("") == []
+
+
+def test_whitespace_only_stream_emits_nothing():
+    assert chunks_of("   \n  ") == []
+
+
+# --- session store -----------------------------------------------------------
+
+
+def test_history_round_trips_as_chat_messages():
+    store = SessionStore()
+    convo = store.get("abc")
+    convo.add("user", "hello")
+    convo.add("assistant", "hi there")
+
+    assert convo.as_messages() == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi there"},
+    ]
+
+
+def test_same_id_returns_the_same_conversation():
+    store = SessionStore()
+    store.get("abc").add("user", "remember me")
+    assert len(store.get("abc").turns) == 1
+
+
+def test_history_is_capped():
+    from meraki.config import MAX_HISTORY_MESSAGES
+
+    convo = SessionStore().get("abc")
+    for i in range(MAX_HISTORY_MESSAGES + 25):
+        convo.add("user", f"turn {i}")
+    assert len(convo.turns) == MAX_HISTORY_MESSAGES
+    # The cap must drop the oldest, not the newest.
+    assert convo.turns[-1].content == f"turn {MAX_HISTORY_MESSAGES + 24}"
+
+
+def test_store_evicts_least_recently_used():
+    store = SessionStore(max_sessions=3)
+    for name in ("a", "b", "c"):
+        store.get(name).add("user", name)
+    store.get("a")  # refresh 'a' so 'b' becomes the coldest
+    store.get("d").add("user", "d")
+
+    assert len(store) == 3
+    assert store.get("b").turns == []  # evicted, comes back empty
+
+
+def test_clear_removes_a_session():
+    store = SessionStore()
+    store.get("abc").add("user", "hello")
+    assert store.clear("abc") is True
+    assert store.clear("abc") is False
+    assert store.get("abc").turns == []
+
+
+# --- key handling ------------------------------------------------------------
+
+
+def test_keys_are_read_from_the_payload():
+    keys = ApiKeys.from_payload(
+        {"deepgram": "dg", "ollama": "ol", "murf": "mu"}
+    )
+    assert keys.missing() == []
+    assert keys.deepgram == "dg"
+
+
+def test_uppercase_env_style_names_also_work():
+    keys = ApiKeys.from_payload(
+        {"DEEPGRAM_API_KEY": "dg", "OLLAMA_API_KEY": "ol", "MURF_API_KEY": "mu"}
+    )
+    assert keys.missing() == []
+
+
+def test_missing_keys_are_reported_by_name():
+    keys = ApiKeys.from_payload({"ollama": "ol"})
+    assert set(keys.missing()) == {"Deepgram", "Murf"}
+
+
+def test_blank_values_count_as_missing():
+    keys = ApiKeys.from_payload({"deepgram": "   ", "ollama": "ol", "murf": "mu"})
+    assert keys.missing() == ["Deepgram"]
+
+
+def test_env_fallback_fills_absent_keys(monkeypatch):
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "from-env")
+    keys = ApiKeys.from_payload({"ollama": "ol", "murf": "mu"})
+    assert keys.deepgram == "from-env"
+    assert keys.missing() == []
+
+
+def test_payload_wins_over_env(monkeypatch):
+    monkeypatch.setenv("MURF_API_KEY", "from-env")
+    keys = ApiKeys.from_payload({"deepgram": "dg", "ollama": "ol", "murf": "explicit"})
+    assert keys.murf == "explicit"
+
+
+# --- protocol ----------------------------------------------------------------
+
+
+def test_every_frame_carries_a_type():
+    from meraki import protocol
+
+    frames = [
+        protocol.ready(),
+        protocol.partial("x"),
+        protocol.final("x"),
+        protocol.thinking(),
+        protocol.reply_chunk("x"),
+        protocol.reply_done("x"),
+        protocol.audio(0, "aGk="),
+        protocol.speech_done(),
+        protocol.interrupted(),
+        protocol.error("code", "message"),
+    ]
+    assert all("type" in frame for frame in frames)
+    assert protocol.error("c", "m")["fatal"] is False
+    assert protocol.error("c", "m", fatal=True)["fatal"] is True
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-v"]))

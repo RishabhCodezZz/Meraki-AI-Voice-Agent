@@ -1,0 +1,399 @@
+import { MicCapture } from './audio-capture.js';
+import { SpeechPlayer } from './audio-player.js';
+import { Visualizer } from './visualizer.js';
+
+const KEY_FIELDS = ['deepgram', 'ollama', 'murf'];
+const REQUIRED = KEY_FIELDS;
+const STORAGE_KEYS = 'meraki.keys';
+const STORAGE_VOICE = 'meraki.voice';
+const STORAGE_MODEL = 'meraki.model';
+
+const el = (id) => document.getElementById(id);
+
+const ui = {
+  status: el('status'),
+  statusDot: el('status-dot'),
+  meter: el('meter'),
+  micBtn: el('mic-btn'),
+  micLabel: el('mic-label'),
+  hint: el('hint'),
+  live: el('live'),
+  liveUser: el('live-user'),
+  liveReply: el('live-reply'),
+  transcript: el('transcript'),
+  empty: el('empty'),
+  settings: el('settings'),
+  settingsForm: el('settings-form'),
+  settingsBtn: el('settings-btn'),
+  closeSettings: el('close-settings'),
+  clearBtn: el('clear-btn'),
+  voiceSelect: el('voice'),
+  modelSelect: el('model'),
+  toasts: el('toasts'),
+};
+
+const visualizer = new Visualizer(ui.meter);
+visualizer.start();
+
+let socket = null;
+let mic = null;
+let player = null;
+let recording = false;
+let replyBuffer = '';
+
+// --- session -----------------------------------------------------------------
+
+function sessionId() {
+  const url = new URL(window.location.href);
+  let id = url.searchParams.get('s');
+  if (!id) {
+    id = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+    url.searchParams.set('s', id);
+    history.replaceState({}, '', url);
+  }
+  return id;
+}
+
+// --- keys --------------------------------------------------------------------
+
+function loadKeys() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEYS)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveKeys(keys) {
+  try {
+    localStorage.setItem(STORAGE_KEYS, JSON.stringify(keys));
+  } catch {
+    toast('Could not save keys in this browser.', 'error');
+  }
+}
+
+function missingKeys() {
+  const keys = loadKeys();
+  return REQUIRED.filter((name) => !keys[name]);
+}
+
+// --- chrome ------------------------------------------------------------------
+
+function setState(state, label) {
+  visualizer.setState(state);
+  ui.status.textContent = label;
+  ui.statusDot.dataset.state = state;
+  document.body.dataset.state = state;
+}
+
+function toast(message, kind = 'info') {
+  const node = document.createElement('div');
+  node.className = `toast toast--${kind}`;
+  node.textContent = message;
+  ui.toasts.appendChild(node);
+  requestAnimationFrame(() => node.classList.add('is-in'));
+  setTimeout(() => {
+    node.classList.remove('is-in');
+    setTimeout(() => node.remove(), 250);
+  }, 4200);
+}
+
+function addTurn(role, content) {
+  ui.empty.hidden = true;
+  const row = document.createElement('div');
+  row.className = `turn turn--${role}`;
+  const who = document.createElement('span');
+  who.className = 'turn__who';
+  who.textContent = role === 'user' ? 'You' : 'Meraki';
+  const body = document.createElement('p');
+  body.className = 'turn__body';
+  body.textContent = content;
+  row.append(who, body);
+  ui.transcript.append(row);
+  ui.transcript.scrollTop = ui.transcript.scrollHeight;
+}
+
+function showLive({ user, reply }) {
+  if (user !== undefined) ui.liveUser.textContent = user;
+  if (reply !== undefined) ui.liveReply.textContent = reply;
+  const hasContent = Boolean(ui.liveUser.textContent || ui.liveReply.textContent);
+  ui.live.hidden = !hasContent;
+}
+
+function clearLive() {
+  ui.liveUser.textContent = '';
+  ui.liveReply.textContent = '';
+  ui.live.hidden = true;
+}
+
+// --- history -----------------------------------------------------------------
+
+async function loadHistory() {
+  try {
+    const response = await fetch(`/api/history/${encodeURIComponent(sessionId())}`);
+    if (!response.ok) return;
+    const { history } = await response.json();
+    ui.transcript.replaceChildren();
+    history.forEach((turn) => addTurn(turn.role, turn.content));
+    ui.empty.hidden = history.length > 0;
+  } catch {
+    /* history is a nicety; never block startup on it */
+  }
+}
+
+async function clearHistory() {
+  await fetch(`/api/history/${encodeURIComponent(sessionId())}`, { method: 'DELETE' });
+  ui.transcript.replaceChildren();
+  ui.empty.hidden = false;
+  clearLive();
+  toast('Conversation cleared.');
+}
+
+// --- socket ------------------------------------------------------------------
+
+function socketUrl() {
+  const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  return `${scheme}://${window.location.host}/ws`;
+}
+
+function connect() {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(socketUrl());
+    ws.binaryType = 'arraybuffer';
+
+    const failed = () => reject(new Error('Could not reach the server.'));
+
+    ws.onopen = () => {
+      ws.send(
+        JSON.stringify({
+          type: 'config',
+          session_id: sessionId(),
+          voice_id: ui.voiceSelect.value,
+          model: ui.modelSelect.value,
+          keys: loadKeys(),
+        })
+      );
+    };
+
+    ws.onmessage = (event) => {
+      let message;
+      try {
+        message = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      if (message.type === 'ready') {
+        ws.onerror = null;
+        resolve(ws);
+      }
+      handleMessage(message);
+    };
+
+    ws.onerror = failed;
+    ws.onclose = (event) => {
+      if (recording) {
+        stopRecording({ silent: true });
+        if (!event.wasClean) toast('Connection lost.', 'error');
+      }
+      socket = null;
+    };
+  });
+}
+
+function handleMessage(message) {
+  switch (message.type) {
+    case 'partial':
+      showLive({ user: message.text });
+      break;
+
+    case 'final':
+      addTurn('user', message.text);
+      showLive({ user: '', reply: '' });
+      replyBuffer = '';
+      break;
+
+    case 'thinking':
+      setState('thinking', 'Thinking');
+      break;
+
+    case 'reply_chunk':
+      replyBuffer += message.text;
+      showLive({ reply: replyBuffer });
+      break;
+
+    case 'reply_done':
+      addTurn('assistant', message.text);
+      clearLive();
+      replyBuffer = '';
+      break;
+
+    case 'audio':
+      setState('speaking', 'Speaking');
+      player.enqueue(message.data).catch(() => {
+        toast('Could not play that audio chunk.', 'error');
+      });
+      break;
+
+    case 'speech_done':
+      if (!player.playing) setState(recording ? 'listening' : 'idle', recording ? 'Listening' : 'Ready');
+      break;
+
+    case 'interrupted':
+      player.flush();
+      replyBuffer = '';
+      showLive({ reply: '' });
+      setState('listening', 'Listening');
+      break;
+
+    case 'error':
+      toast(message.message, 'error');
+      if (message.fatal) stopRecording({ silent: true });
+      else setState(recording ? 'listening' : 'idle', recording ? 'Listening' : 'Ready');
+      break;
+  }
+}
+
+// --- recording ---------------------------------------------------------------
+
+async function startRecording() {
+  const missing = missingKeys();
+  if (missing.length) {
+    toast('Add your API keys to get started.', 'error');
+    openSettings();
+    return;
+  }
+
+  setState('connecting', 'Connecting');
+  ui.micBtn.disabled = true;
+
+  try {
+    player = player || new SpeechPlayer({
+      onLevel: (bins) => visualizer.setSpectrum(bins),
+      onIdle: () => {
+        if (recording) setState('listening', 'Listening');
+      },
+    });
+    // Unlock playback inside the click gesture, for Safari's autoplay policy.
+    await player.ensureContext();
+
+    socket = await connect();
+
+    mic = new MicCapture({
+      onFrame: (buffer) => {
+        if (socket && socket.readyState === WebSocket.OPEN) socket.send(buffer);
+      },
+      onLevel: (bins) => visualizer.setSpectrum(bins),
+    });
+    await mic.start();
+
+    recording = true;
+    ui.micBtn.dataset.active = 'true';
+    ui.micLabel.textContent = 'Stop';
+    ui.hint.textContent = 'Just talk. Interrupt any time.';
+    setState('listening', 'Listening');
+  } catch (error) {
+    const message =
+      error && error.name === 'NotAllowedError'
+        ? 'Microphone access was blocked.'
+        : (error && error.message) || 'Could not start.';
+    toast(message, 'error');
+    await stopRecording({ silent: true });
+  } finally {
+    ui.micBtn.disabled = false;
+  }
+}
+
+async function stopRecording({ silent = false } = {}) {
+  recording = false;
+  ui.micBtn.dataset.active = 'false';
+  ui.micLabel.textContent = 'Start talking';
+  ui.hint.textContent = 'Click to start a conversation';
+
+  if (mic) {
+    await mic.stop();
+    mic = null;
+  }
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send('stop');
+    socket.close();
+  }
+  socket = null;
+  if (player) player.flush();
+  clearLive();
+  setState('idle', 'Ready');
+  if (!silent) loadHistory();
+}
+
+function toggleRecording() {
+  if (recording) stopRecording();
+  else startRecording();
+}
+
+// --- settings ----------------------------------------------------------------
+
+function openSettings() {
+  const keys = loadKeys();
+  KEY_FIELDS.forEach((name) => {
+    const field = el(`key-${name}`);
+    if (field) field.value = keys[name] || '';
+  });
+  ui.settings.showModal();
+}
+
+function submitSettings(event) {
+  event.preventDefault();
+  const keys = {};
+  KEY_FIELDS.forEach((name) => {
+    const value = el(`key-${name}`).value.trim();
+    if (value) keys[name] = value;
+  });
+
+  const missing = REQUIRED.filter((name) => !keys[name]);
+  if (missing.length) {
+    toast('Deepgram, Ollama and Murf keys are all required.', 'error');
+    return;
+  }
+
+  saveKeys(keys);
+  ui.settings.close();
+  toast('Keys saved on this device.');
+}
+
+// --- boot --------------------------------------------------------------------
+
+ui.micBtn.addEventListener('click', toggleRecording);
+ui.settingsBtn.addEventListener('click', openSettings);
+ui.closeSettings.addEventListener('click', () => ui.settings.close());
+ui.settingsForm.addEventListener('submit', submitSettings);
+ui.clearBtn.addEventListener('click', clearHistory);
+
+ui.voiceSelect.addEventListener('change', () => {
+  localStorage.setItem(STORAGE_VOICE, ui.voiceSelect.value);
+  if (recording) toast('New voice applies next time you start.');
+});
+
+ui.modelSelect.addEventListener('change', () => {
+  localStorage.setItem(STORAGE_MODEL, ui.modelSelect.value);
+  if (recording) toast('New model applies next time you start.');
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.code === 'Space' && event.target === document.body) {
+    event.preventDefault();
+    toggleRecording();
+  }
+});
+
+window.addEventListener('beforeunload', () => {
+  if (socket) socket.close();
+});
+
+const savedVoice = localStorage.getItem(STORAGE_VOICE);
+if (savedVoice) ui.voiceSelect.value = savedVoice;
+const savedModel = localStorage.getItem(STORAGE_MODEL);
+if (savedModel) ui.modelSelect.value = savedModel;
+
+sessionId();
+loadHistory();
+setState('idle', 'Ready');
+if (missingKeys().length) openSettings();

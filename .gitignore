@@ -1,28 +1,11 @@
-# Python
 __pycache__/
 *.py[cod]
-*.pyo
-
-# Virtual environments
 venv/
 .venv/
-
-# Audio files
-*.wav
-*.mp3
-*.webm
-*.m4a
-
-# IDE files
+.env
+*.log
 .vscode/
 .idea/
-
-# OS files
 .DS_Store
 Thumbs.db
-
-# Logs
-*.log
-
-#env
-.env
+.pytest_cache/
