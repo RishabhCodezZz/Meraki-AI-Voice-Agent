@@ -67,6 +67,9 @@ async def _lifespan(_app: FastAPI):
     global _http
     _http = aiohttp.ClientSession()
     logger.info("%s v%s ready", APP_NAME, APP_VERSION)
+    # Say so at boot rather than letting the first visitor discover it.
+    if missing := ApiKeys.from_env().missing():
+        logger.warning("Not configured: %s. Conversations will fail.", ", ".join(missing))
     yield
     await _http.close()
 

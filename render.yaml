@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: meraki-voice
+    name: meraki-ai-voice-agent
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
@@ -9,3 +9,12 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.8"
+      # sync: false means Render prompts for these at deploy time and keeps them
+      # out of the repo. Without all three the app starts but every conversation
+      # fails on the handshake.
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: OLLAMA_API_KEY
+        sync: false
+      - key: MURF_API_KEY
+        sync: false
