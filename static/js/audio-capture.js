@@ -74,10 +74,6 @@ export class MicCapture {
     this.raf = requestAnimationFrame(tick);
   }
 
-  setMuted(muted) {
-    if (this.node) this.node.port.postMessage({ type: 'mute', value: muted });
-  }
-
   async stop() {
     cancelAnimationFrame(this.raf);
     this.raf = 0;

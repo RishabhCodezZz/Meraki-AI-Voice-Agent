@@ -19,13 +19,6 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.buffer = new Int16Array(FRAME_SAMPLES);
     this.filled = 0;
     this.carry = 0; // fractional read position between render quanta
-    this.muted = false;
-
-    this.port.onmessage = (event) => {
-      if (event.data && event.data.type === 'mute') {
-        this.muted = Boolean(event.data.value);
-      }
-    };
   }
 
   /** Box-average downsample; cheap and avoids the aliasing of naive picking. */
@@ -58,7 +51,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
     const samples = this.needsResample ? this.resample(channel) : channel;
 
     for (let i = 0; i < samples.length; i++) {
-      const clamped = this.muted ? 0 : Math.max(-1, Math.min(1, samples[i]));
+      const clamped = Math.max(-1, Math.min(1, samples[i]));
       this.buffer[this.filled++] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
 
       if (this.filled === FRAME_SAMPLES) {

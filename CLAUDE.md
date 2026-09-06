@@ -63,6 +63,11 @@ use with `preview_start`.
 - **Barge-in fires on a partial of ≥ `BARGE_IN_MIN_WORDS` (2)**, not on finals.
   One word is too twitchy against residual echo; waiting for a final is too slow
   to feel like an interruption.
+- **Meraki's own voice is filtered by text, not by muting.** `looks_like_echo`
+  drops any transcript contained in what is currently being spoken. Muting the
+  mic during playback would also work and would remove barge-in, which is the
+  wrong trade. `_spoken` is held past the end of a turn on purpose — trailing
+  audio echoes too — and reset when the next turn starts.
 - **Deepgram's two flags are not interchangeable.** `is_final` means a segment is
   settled; `speech_final` means endpointing fired. Segments accumulate and the
   utterance is emitted on `speech_final`. Acting on `is_final` alone chops long
@@ -174,6 +179,8 @@ The original was a single 590-line `app.py` plus one 390-line HTML file. Audited
 ## 9. Changelog
 
 - **2026-09-06** — Audited the original. 3 P0, 7 P1, 17 P2 defects documented.
+- **2026-09-07** — Echo rejection: the assistant no longer interrupts itself on
+  speakers. Removed the unused mic-mute plumbing that approach made redundant.
 - **2026-09-07** — Keys moved to the environment; settings dialog and all
   client-side key handling removed while developing. BYO to return before
   hosting.

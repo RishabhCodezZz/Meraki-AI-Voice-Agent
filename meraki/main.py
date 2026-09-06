@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 from typing import Optional
 
 import aiohttp
@@ -40,6 +41,29 @@ _http: Optional[aiohttp.ClientSession] = None
 # Barge-in only fires on a partial with at least this many words, so a stray
 # syllable of echo does not cut the assistant off mid-sentence.
 BARGE_IN_MIN_WORDS = 2
+
+_WORDS = re.compile(r"[a-z0-9']+")
+
+
+def _normalise(text: str) -> str:
+    return " ".join(_WORDS.findall(text.lower()))
+
+
+def looks_like_echo(heard: str, spoken: str) -> bool:
+    """Is this the assistant hearing itself through the speakers?
+
+    On speakers at volume the browser's echo cancellation is not enough, and
+    Deepgram happily transcribes Meraki's own voice. Muting the microphone while
+    it speaks would fix that by removing barge-in, which is the wrong trade.
+
+    Instead: we know exactly what is being said, so a transcript contained in it
+    is echo. The cost is that saying a phrase back verbatim while it is speaking
+    will not interrupt it - rare, and recoverable by speaking again.
+    """
+    if not spoken:
+        return False
+    phrase = _normalise(heard)
+    return bool(phrase) and phrase in _normalise(spoken)
 
 
 @app.on_event("startup")
@@ -123,6 +147,9 @@ class _Connection:
         self._keys: Optional[ApiKeys] = None
         self._session_id = ""
         self._send_lock = asyncio.Lock()
+        # What the assistant is currently saying, used to recognise its own
+        # voice coming back through the microphone.
+        self._spoken = ""
 
     async def run(self) -> None:
         if not await self._handshake():
@@ -207,12 +234,18 @@ class _Connection:
 
             if kind == "partial":
                 text = event["text"]
+                if looks_like_echo(text, self._spoken):
+                    logger.debug("Ignoring own voice: %r", text)
+                    continue
                 await self._send(protocol.partial(text))
                 if len(text.split()) >= BARGE_IN_MIN_WORDS:
                     await self._cancel_turn(notify=True)
 
             elif kind == "final":
                 text = event["text"]
+                if looks_like_echo(text, self._spoken):
+                    logger.debug("Ignoring own voice (final): %r", text)
+                    continue
                 await self._send(protocol.final(text))
                 await self._cancel_turn(notify=False)
                 self._turn = asyncio.create_task(self._run_turn(text))
@@ -248,6 +281,14 @@ class _Connection:
 
     async def _send(self, payload: dict) -> None:
         """Serialised send that tolerates a socket closing underneath us."""
+        kind = payload.get("type")
+        if kind == "thinking":
+            self._spoken = ""
+        elif kind == "reply_chunk":
+            # Held past the end of the turn on purpose: audio is still playing
+            # out after the last token, and that tail echoes too.
+            self._spoken += payload["text"]
+
         async with self._send_lock:
             try:
                 await self._ws.send_json(payload)
