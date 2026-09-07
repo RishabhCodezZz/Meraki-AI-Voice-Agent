@@ -7,6 +7,7 @@ key or a network call.
 from __future__ import annotations
 
 import asyncio
+import base64
 
 import pytest
 
@@ -14,10 +15,21 @@ from meraki.config import TTS_SAMPLE_RATE, VOICE_ID, VOICE_STYLE
 from meraki.services import tts
 
 
+class _Content:
+    """Stands in for aiohttp's chunked response body."""
+
+    def __init__(self, chunks: list[bytes]):
+        self._chunks = chunks
+
+    async def iter_any(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
 class _FakeResponse:
-    def __init__(self, status: int, payload: dict | None = None, body: str = ""):
+    def __init__(self, status: int, chunks: list[bytes] | None = None, body: str = ""):
         self.status = status
-        self._payload = payload or {}
+        self.content = _Content(chunks if chunks is not None else [b"mp3-bytes"])
         self._body = body
 
     async def __aenter__(self):
@@ -26,14 +38,8 @@ class _FakeResponse:
     async def __aexit__(self, *_):
         return False
 
-    async def json(self):
-        return self._payload
-
     async def text(self):
         return self._body
-
-    async def read(self):
-        return b"mp3-bytes"
 
 
 class _FakeSession:
@@ -42,15 +48,12 @@ class _FakeSession:
     def __init__(self, responses: list[_FakeResponse]):
         self._responses = list(responses)
         self.posts: list[dict] = []
-        self.gets: list[str] = []
+        self.urls: list[str] = []
 
     def post(self, url, json=None, headers=None, timeout=None):
         self.posts.append(json)
+        self.urls.append(url)
         return self._responses.pop(0)
-
-    def get(self, url, timeout=None):
-        self.gets.append(url)
-        return _FakeResponse(200)
 
 
 @pytest.fixture(autouse=True)
@@ -65,23 +68,39 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def test_request_asks_for_inline_base64_audio():
-    """No second round trip to download the MP3 - that was pure latency."""
-    session = _FakeSession([_FakeResponse(200, {"encodedAudio": "QUJD"})])
+def test_streamed_chunks_are_joined_and_base64_encoded():
+    """The body arrives in pieces; all of them must reach the browser."""
+    session = _FakeSession([_FakeResponse(200, chunks=[b"abc", b"def", b"ghi"])])
 
     result = run(tts.synthesize(session, "key", "Hello there.", VOICE_ID))
 
-    assert result == "QUJD"
-    assert session.posts[0]["encodeAsBase64"] is True
-    assert session.gets == []  # nothing downloaded
+    assert base64.b64decode(result) == b"abcdefghi"
 
 
-def test_request_carries_voice_style_and_sample_rate():
-    session = _FakeSession([_FakeResponse(200, {"encodedAudio": "QUJD"})])
+def test_the_streaming_endpoint_is_used():
+    """Not /v1/speech/generate - that took 2865ms where this takes ~500ms."""
+    from meraki.config import MURF_STREAM_URL
 
+    session = _FakeSession([_FakeResponse(200)])
+    run(tts.synthesize(session, "key", "Hello.", VOICE_ID))
+
+    assert session.urls == [MURF_STREAM_URL]
+
+
+def test_an_empty_body_is_an_error_not_silent_success():
+    session = _FakeSession([_FakeResponse(200, chunks=[])])
+    with pytest.raises(tts.TTSError, match="no audio"):
+        run(tts.synthesize(session, "key", "Hello.", VOICE_ID))
+
+
+def test_request_carries_model_voice_style_and_sample_rate():
+    from meraki.config import MURF_MODEL
+
+    session = _FakeSession([_FakeResponse(200)])
     run(tts.synthesize(session, "key", "Hello there.", VOICE_ID))
 
     sent = session.posts[0]
+    assert sent["model"] == MURF_MODEL
     assert sent["style"] == VOICE_STYLE
     assert sent["sampleRate"] == TTS_SAMPLE_RATE
     assert sent["voiceId"] == VOICE_ID
@@ -93,13 +112,13 @@ def test_unsupported_style_is_dropped_and_retried():
     session = _FakeSession(
         [
             _FakeResponse(400, body="style not supported for this voice"),
-            _FakeResponse(200, {"encodedAudio": "QUJD"}),
+            _FakeResponse(200),
         ]
     )
 
     result = run(tts.synthesize(session, "key", "Hello there.", VOICE_ID))
 
-    assert result == "QUJD"
+    assert result
     assert len(session.posts) == 2
     assert "style" in session.posts[0]
     assert "style" not in session.posts[1]
@@ -110,26 +129,16 @@ def test_style_is_not_retried_once_known_unsupported():
     first = _FakeSession(
         [
             _FakeResponse(400, body="style not supported"),
-            _FakeResponse(200, {"encodedAudio": "QUJD"}),
+            _FakeResponse(200),
         ]
     )
     run(tts.synthesize(first, "key", "One.", VOICE_ID))
 
-    second = _FakeSession([_FakeResponse(200, {"encodedAudio": "QUJD"})])
+    second = _FakeSession([_FakeResponse(200)])
     run(tts.synthesize(second, "key", "Two.", VOICE_ID))
 
     assert "style" not in second.posts[0]
     assert len(second.posts) == 1
-
-
-def test_url_response_is_still_handled():
-    """Older accounts may answer with a URL instead of inline audio."""
-    session = _FakeSession([_FakeResponse(200, {"audioFile": "https://x/a.mp3"})])
-
-    result = run(tts.synthesize(session, "key", "Hello.", VOICE_ID))
-
-    assert result  # base64 of the downloaded bytes
-    assert session.gets == ["https://x/a.mp3"]
 
 
 def test_missing_key_fails_before_any_request():

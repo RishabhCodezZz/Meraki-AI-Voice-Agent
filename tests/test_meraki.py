@@ -66,6 +66,21 @@ def test_no_chunk_exceeds_the_cap_even_without_punctuation():
         assert len(chunk) <= CHUNK_MAX_CHARS
 
 
+def test_a_tight_em_dash_still_starts_the_audio_early():
+    """Measured case: "hot pan-about thirty seconds" fell back to one chunk."""
+    text = "Fry it on high heat in a hot pan—about thirty seconds is plenty."
+    chunks = chunks_of(text)
+    assert len(chunks) > 1
+    assert chunks[0].endswith("—")
+
+
+def test_a_number_is_never_split_across_chunks():
+    """Commas require trailing space, so "1,500" is not a clause boundary."""
+    text = "It costs about 1,500 rupees, which is honestly a bargain for that."
+    chunks = chunks_of(text)
+    assert any("1,500" in chunk for chunk in chunks), chunks
+
+
 def test_short_reply_emits_one_chunk():
     assert chunks_of("Sure.") == ["Sure."]
 

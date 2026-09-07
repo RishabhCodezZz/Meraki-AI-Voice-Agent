@@ -9,11 +9,14 @@ chunk is deliberately short so sound starts almost immediately; later chunks are
 longer to keep request count down. Synthesis runs concurrently but results are
 yielded strictly in order, so playback is seamless.
 
-Two things keep each chunk cheap:
-  - ``encodeAsBase64`` returns the audio in the response body, so there is no
-    second round trip to download the MP3 from a URL.
-  - 24 kHz instead of Murf's 44.1 kHz default is roughly half the bytes, and
-    speech does not need the headroom.
+Synthesis goes to Murf's streaming endpoint rather than ``/v1/speech/generate``.
+Measured on identical text, generate took 2865ms to return anything; the stream
+endpoint delivers its first byte in 150-280ms and finishes in about 500ms. It is
+also the only place Murf's current Falcon 2 model is available - generate rejects
+it and accepts only the deprecated GEN2.
+
+24 kHz rather than the 44.1 kHz default roughly halves the bytes, and speech does
+not need the headroom.
 """
 
 from __future__ import annotations
@@ -30,7 +33,8 @@ from ..config import (
     CHUNK_MAX_CHARS,
     CHUNK_MIN_CHARS,
     FIRST_CHUNK_MIN_CHARS,
-    MURF_TTS_URL,
+    MURF_MODEL,
+    MURF_STREAM_URL,
     TTS_SAMPLE_RATE,
     TTS_TIMEOUT,
     VOICE_ID,
@@ -43,7 +47,10 @@ MAX_IN_FLIGHT = 3
 
 # A boundary we are happy to cut on, strongest first.
 _SENTENCE_END = re.compile(r"[.!?…]['\")\]]*\s")
-_CLAUSE_END = re.compile(r"[,;:—]\s")
+# Dashes are commonly typed tight against the next word ("pan-about"), so they
+# do not require trailing space; commas and colons do, to avoid cutting inside
+# decimals and times.
+_CLAUSE_END = re.compile(r"[,;:]\s|[—–]\s?")
 
 # Set once, the first time Murf tells us the style is not valid for this voice,
 # so we stop paying for a failed request on every subsequent chunk.
@@ -125,9 +132,10 @@ async def synthesize(
     plain = {
         "text": text,
         "voiceId": voice_id,
+        "model": MURF_MODEL,
         "format": "MP3",
         "sampleRate": TTS_SAMPLE_RATE,
-        "encodeAsBase64": True,
+        "channelType": "MONO",
     }
     styled = VOICE_STYLE and _style_supported
     # Build a separate dict rather than mutating one across both attempts.
@@ -150,30 +158,22 @@ async def synthesize(
     if result is None:
         raise TTSError(f"Murf rejected the request: {rejected}")
 
-    if encoded := result.get("encodedAudio"):
-        return encoded
-
-    # Older accounts may still answer with a URL instead.
-    audio_url = result.get("audioFile")
-    if not audio_url:
-        raise TTSError("Murf returned no audio.")
-
-    timeout = aiohttp.ClientTimeout(total=TTS_TIMEOUT)
-    async with session.get(audio_url, timeout=timeout) as response:
-        if response.status != 200:
-            raise TTSError("Could not download the generated audio.")
-        return base64.b64encode(await response.read()).decode("ascii")
+    return base64.b64encode(result).decode("ascii")
 
 
 async def _post(
     session: aiohttp.ClientSession, api_key: str, payload: dict
-) -> tuple[Optional[dict], Optional[str]]:
-    """Returns (result, None) on success, or (None, detail) on a 400."""
+) -> tuple[Optional[bytes], Optional[str]]:
+    """Returns (audio bytes, None) on success, or (None, detail) on a 400.
+
+    The endpoint answers with a chunked audio stream, so the body is read as it
+    arrives rather than waiting for a JSON envelope.
+    """
     timeout = aiohttp.ClientTimeout(total=TTS_TIMEOUT)
     headers = {"api-key": api_key, "Content-Type": "application/json"}
 
     async with session.post(
-        MURF_TTS_URL, json=payload, headers=headers, timeout=timeout
+        MURF_STREAM_URL, json=payload, headers=headers, timeout=timeout
     ) as response:
         if response.status == 400:
             return None, (await response.text())[:200]
@@ -181,7 +181,13 @@ async def _post(
             detail = (await response.text())[:200]
             logger.error("Murf %s: %s", response.status, detail)
             raise TTSError(_explain(response.status))
-        return await response.json(), None
+
+        audio = bytearray()
+        async for part in response.content.iter_any():
+            audio += part
+        if not audio:
+            raise TTSError("Murf returned no audio.")
+        return bytes(audio), None
 
 
 async def stream_speech(

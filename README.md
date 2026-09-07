@@ -1,5 +1,7 @@
 # Meraki
 
+[![CI](https://github.com/RishabhCodezZz/Meraki-AI-Voice-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/RishabhCodezZz/Meraki-AI-Voice-Agent/actions/workflows/ci.yml)
+
 Your friendly neighbourhood AI — a real-time voice agent that talks back before
 it has finished thinking.
 
@@ -109,11 +111,12 @@ static/js/
 
 ```bash
 pip install pytest
-python -m pytest tests/ -q
+python -m pytest tests/ -q          # 57 backend
+node --test "tests/frontend/*.test.js"   # 21 browser logic
 ```
 
-46 tests, no network and no keys. They cover the parts where being wrong is
-quiet rather than loud:
+78 tests, no network and no keys, run on every push. They cover the parts where
+being wrong is quiet rather than loud:
 
 - **Chunk splitting** — every character survives, the first chunk stays short,
   nothing exceeds the cap even with no punctuation to cut on.
@@ -125,8 +128,18 @@ quiet rather than loud:
   nothing at all.
 - **Failure modes** — a TTS failure still releases the UI, an unexpected crash
   does not leak internal detail into a user-facing message.
-- **The Murf request shape** — inline base64 is requested (no download round
-  trip) and an unsupported style is dropped and retried rather than failing.
+- **The Murf request shape** — the streaming endpoint is used and an unsupported
+  style is dropped and retried rather than failing the turn.
+- **Microphone capture** — the 48k→16k resampler keeps amplitude and loses no
+  samples across callbacks, and full-scale input clamps instead of wrapping. A
+  wrap here would be an audible click and quietly worse transcription.
+- **Playback scheduling** — chunks butt up against each other exactly, and audio
+  that finishes decoding *after* the user interrupts is discarded rather than
+  speaking over them.
+
+CI also boots the app and hits `/health`, which catches the class of break a unit
+test cannot: a bad import, a template that stopped rendering, a route that
+disappeared.
 
 ## Notes
 
@@ -143,15 +156,22 @@ One turn, end to end, against live APIs:
 
 | | |
 |---|---|
-| First token from the model | ~0.6 s |
-| First audio reaching the browser | ~3.2 s |
+| First token from the model | ~0.65 s |
+| First audio reaching the browser | **~1.2–1.9 s** |
 | Transcription accuracy | word-perfect on a clean 3.3 s sample |
 
-Time to first audio is the number that matters, and most of what remains is
-Murf's synthesis of the opening clause. Cutting the first chunk on a comma
-rather than waiting for a full stop took it from 4.0 s to 3.2 s — the replies
-here are usually a single sentence, so waiting for a sentence boundary meant
-waiting for the whole reply and the pipelining bought nothing.
+Time to first audio is the number that matters. It started at 4.0 s:
+
+| Change | Result |
+|---|---|
+| Cut the first chunk on a clause, not a sentence | 4.0 s → 3.2 s |
+| Murf's streaming endpoint instead of `/v1/speech/generate` | 3.2 s → ~1.4 s |
+
+The first was a measurement surprise: the persona asks for one-sentence replies,
+so a sentence-only rule meant the only boundary was at the very end and the
+pipelining never engaged at all. The second is simply a much faster endpoint —
+measured on identical text, `generate` took 2865 ms to return anything, while
+`stream` delivers its first byte in 150–280 ms.
 
 ## Engineering notes
 

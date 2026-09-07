@@ -1,0 +1,9 @@
+{
+  "name": "meraki-voice-agent",
+  "private": true,
+  "type": "module",
+  "description": "Frontend tests only. The app itself has no build step and no runtime dependencies.",
+  "scripts": {
+    "test": "node --test \"tests/frontend/*.test.js\""
+  }
+}

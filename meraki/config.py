@@ -19,7 +19,12 @@ APP_VERSION = "3.0.0"
 # --- Upstream services -------------------------------------------------------
 
 OLLAMA_CHAT_URL = "https://ollama.com/api/chat"
-MURF_TTS_URL = "https://api.murf.ai/v1/speech/generate"
+# The streaming endpoint, not /v1/speech/generate. Measured on the same text:
+# generate 2865ms to produce anything at all, stream 150-280ms to first byte and
+# ~500ms complete. Falcon 2 is Murf's current model and only exists here -
+# generate rejects it and only accepts the deprecated GEN2.
+MURF_STREAM_URL = "https://global.api.murf.ai/v1/speech/stream"
+MURF_MODEL = os.getenv("MERAKI_TTS_MODEL", "falcon-2")
 
 DEEPGRAM_MODEL = os.getenv("MERAKI_STT_MODEL", "nova-3")
 

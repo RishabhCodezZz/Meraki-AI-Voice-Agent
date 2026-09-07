@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+      - name: Test
+        # No credentials are set, which is deliberate: the suite must pass
+        # without them or it is testing the network rather than the code.
+        run: python -m pytest tests/ -q
+
+  frontend:
+    name: Browser-logic tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Test
+        run: node --test "tests/frontend/*.test.js"
+
+  startup:
+    name: App imports and serves
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Boot and hit /health
+        # Catches the class of break unit tests miss: a bad import, a template
+        # that no longer renders, a route that vanished.
+        run: |
+          python -m uvicorn meraki.main:app --port 8000 &
+          for i in $(seq 1 20); do
+            curl -sf http://127.0.0.1:8000/health && break || sleep 1
+          done
+          curl -sf http://127.0.0.1:8000/health | grep -q '"status":"ok"'
+          curl -sf http://127.0.0.1:8000/ | grep -q "Meraki"

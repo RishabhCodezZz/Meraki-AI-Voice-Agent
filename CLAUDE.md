@@ -33,13 +33,16 @@ mic ──► PCM16 @16kHz ──► Deepgram Nova-3 ──► Ollama Cloud ─�
 | `static/js/visualizer.js` | The bar meter |
 | `static/js/worklets/capture-processor.js` | Runs on the audio thread |
 | `tests/` | Offline unit tests; no keys needed |
+| `tests/frontend/` | Browser-logic tests via `node --test`, no dependencies |
+| `.github/workflows/ci.yml` | Runs both suites plus a boot check on every push |
 
 ## 3. Running
 
 ```bash
 pip install -r requirements.txt
-python run.py                  # http://127.0.0.1:8000
-python -m pytest tests/ -q
+python run.py                             # http://127.0.0.1:8000
+python -m pytest tests/ -q                # backend
+node --test "tests/frontend/*.test.js"    # browser logic, needs no npm install
 ```
 
 `.claude/launch.json` defines a `meraki` preview server (with `--reload`) for
@@ -157,7 +160,10 @@ The original was a single 590-line `app.py` plus one 390-line HTML file. Audited
 - **Model and voice are server-side, not user-selectable.** The page does not
   ask and the handshake ignores any `model` / `voice_id` a client sends. Change
   them with `MERAKI_MODEL` / `MERAKI_VOICE_ID` / `MERAKI_VOICE_STYLE`.
-- **Murf `encodeAsBase64` + 24 kHz.** Inline audio removes a second round trip
+- **Murf's stream endpoint, not generate.** Measured on identical text: generate
+  2865ms to return anything, stream 150-280ms to first byte. Falcon 2 is Murf's
+  current TTS model and exists only on the stream endpoint - generate rejects it
+  and accepts only the deprecated GEN2. 24 kHz Inline audio removes a second round trip
   per chunk; 24 kHz halves the bytes and speech does not need the headroom.
   `Conversational` style is what makes it sound friendly - more than the voice
   choice does - and an unsupported style is dropped and retried, once, cached.
@@ -185,18 +191,22 @@ Not inferred - actually run:
 
 ## 8. Open items
 
-- Murf REST is called once per chunk. If Murf's WebSocket streaming API is
-  usable, it would cut a round trip per chunk. `tts.py` has the seam for it.
+- Murf's stream endpoint is consumed to completion per chunk. Forwarding its
+  bytes to the browser as they arrive (PCM rather than MP3) would shave a few
+  hundred ms more, at roughly 12x the bandwidth.
 - History is in memory only; a restart loses it. Fine for a demo, needs Redis or
   similar for anything real.
 - No echo cancellation beyond the browser's `echoCancellation: true`. On
   speakers at volume, barge-in can still self-trigger.
 - No rate limiting or CORS policy on the public deployment.
-- Frontend has no tests.
+- `looks_like_echo` lives in `main.py`; if that file grows it wants its own home.
 
 ## 9. Changelog
 
 - **2026-09-06** — Audited the original. 3 P0, 7 P1, 17 P2 defects documented.
+- **2026-09-07** — Murf's stream endpoint replaces generate: 3.2s → ~1.4s to
+  first audio. Added CI (both suites plus a boot check) and 21 browser-logic
+  tests via `node --test`. Tests 57 → 78.
 - **2026-09-07** — Verified the whole pipeline against live keys. First chunk
   now cuts on clauses (4.0s → 3.2s to first audio). Adopted FastAPI's lifespan
   handler, removing 4 deprecation warnings from every test run.
