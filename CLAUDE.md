@@ -59,6 +59,10 @@ use with `preview_start`.
 - **The page knows whether it must demand keys.** `keys_required` is passed to
   the template from `ApiKeys.from_env().missing()`, so a deployment with its own
   keys does not shove a dialog at first-time visitors.
+- **The deployment deliberately sets no keys** (`render.yaml` declares none), so
+  it costs nothing to run and every visitor spends their own free tier. Missing
+  all three logs at INFO, not WARNING — that is the intended posture. *Partially*
+  configured logs a warning, because it is nearly always a mistake.
 - **`ready` means everything is up**, including the Deepgram socket. It is sent
   after STT connects, not during the handshake — otherwise the browser goes and
   asks for microphone permission before we know the STT key is even valid.

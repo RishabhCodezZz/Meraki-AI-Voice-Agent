@@ -9,12 +9,8 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.8"
-      # sync: false means Render prompts for these at deploy time and keeps them
-      # out of the repo. Without all three the app starts but every conversation
-      # fails on the handshake.
-      - key: DEEPGRAM_API_KEY
-        sync: false
-      - key: OLLAMA_API_KEY
-        sync: false
-      - key: MURF_API_KEY
-        sync: false
+    # No API keys here on purpose. Every visitor brings their own through the
+    # Keys dialog, so the deployment costs nothing to run and nobody spends
+    # anyone else's quota. To host a demo that works on first click instead,
+    # add DEEPGRAM_API_KEY, OLLAMA_API_KEY and MURF_API_KEY in the Render
+    # dashboard - visitors then fall back to those unless they enter their own.

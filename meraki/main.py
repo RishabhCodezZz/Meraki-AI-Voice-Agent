@@ -87,11 +87,14 @@ async def _lifespan(_app: FastAPI):
     _http = aiohttp.ClientSession()
     logger.info("%s v%s ready", APP_NAME, APP_VERSION)
     # Say so at boot rather than letting the first visitor discover it.
-    if missing := ApiKeys.from_env().missing():
-        logger.warning(
-            "No server key for: %s. Visitors must supply their own in Settings.",
-            ", ".join(missing),
-        )
+    missing = ApiKeys.from_env().missing()
+    if len(missing) == 3:
+        # The intended posture for a public deploy, so this is not a warning.
+        logger.info("No server keys set - every visitor brings their own.")
+    elif missing:
+        # Some but not all is almost always a misconfiguration: visitors will be
+        # asked for keys they may assume are already provided.
+        logger.warning("Partially configured - no server key for: %s", ", ".join(missing))
     yield
     await _http.close()
 
@@ -216,10 +219,12 @@ class _Connection:
         # Scoped to this connection. Never assign keys to module state.
         self._keys = ApiKeys.from_payload(message.get("keys") or {})
         if missing := self._keys.missing():
+            names = ", ".join(missing)
+            it = "it" if len(missing) == 1 else "them"
             await self._send(
                 protocol.error(
                     "keys",
-                    f"Missing {', '.join(missing)}. Add it under Settings.",
+                    f"No key for {names}. Add {it} under Keys.",
                     fatal=True,
                 )
             )

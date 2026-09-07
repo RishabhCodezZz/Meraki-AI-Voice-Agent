@@ -64,9 +64,11 @@ other's credits.
 dashboard) and any key a visitor leaves blank falls back to yours.
 
 A visitor's key always beats the server's, so someone who brings their own
-spends their own quota. Deploy with no keys set and every visitor must bring
-their own; deploy with them set and the page works on first click — at your
-expense.
+spends their own quota.
+
+**The hosted version sets no server keys**, so it costs nothing to run and every
+visitor uses their own free tier. The dialog opens by itself on first visit and
+links to all three signup pages.
 
 Press **Start talking** and speak. Interrupt it whenever you like — it stops.
 
