@@ -114,6 +114,13 @@ use with `preview_start`.
   mtime under `static/`. Without it the browser keeps its cached CSS and JS, so
   a deploy ships new markup against old styles — which is exactly what happened
   during the redesign and looked like the CSS being broken.
+- **The status chip tells the truth about whether it can run.** `restIdle()` is
+  the single place that decides between green "Ready" and red "Needs keys", and
+  every path back to rest goes through it. Do not call `setState('idle', ...)`
+  directly from a handler — that is how it ended up claiming Ready with no keys.
+- **The live caption reserves its space** (`.live { min-height }`) and is never
+  hidden. Toggling it shoved the whole page down the moment Meraki started
+  speaking and back up when it stopped.
 - **The page itself never scrolls.** `body` is a five-row grid at `100dvh` with
   the conversation on `minmax(0, 1fr)`; that row plus `min-height: 0` on `.log`
   is what lets the transcript shrink and scroll internally while the mic stays
@@ -221,6 +228,9 @@ Not inferred - actually run:
 ## 9. Changelog
 
 - **2026-09-06** — Audited the original. 3 P0, 7 P1, 17 P2 defects documented.
+- **2026-09-07** — Status chip now reflects whether keys exist (green Ready /
+  red Needs keys) instead of always claiming Ready. Stopped the layout jumping
+  while speaking, and closed the conversation card off the bottom edge.
 - **2026-09-07** — Bring-your-own-key restored, per connection, with the server
   as fallback. Tightened the persona: replies were drifting into three sentences
   and trailing "anything else?" offers. Tests 78 → 85.

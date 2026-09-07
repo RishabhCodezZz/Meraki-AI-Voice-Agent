@@ -95,7 +95,14 @@ function setState(state, label) {
   visualizer.setState(state);
   ui.status.textContent = label;
   ui.statusDot.dataset.state = state;
+  ui.statusDot.parentElement.dataset.state = state;
   document.body.dataset.state = state;
+}
+
+/** What the chip should read when no conversation is running. */
+function restIdle() {
+  if (missingKeys().length) setState('blocked', 'Needs keys');
+  else setState('idle', 'Ready');
 }
 
 function toast(message, kind = 'info') {
@@ -134,14 +141,11 @@ function addTurn(role, content) {
 function showLive({ user, reply }) {
   if (user !== undefined) ui.liveUser.textContent = user;
   if (reply !== undefined) ui.liveReply.textContent = reply;
-  const hasContent = Boolean(ui.liveUser.textContent || ui.liveReply.textContent);
-  ui.live.hidden = !hasContent;
 }
 
 function clearLive() {
   ui.liveUser.textContent = '';
   ui.liveReply.textContent = '';
-  ui.live.hidden = true;
 }
 
 // --- history -----------------------------------------------------------------
@@ -276,7 +280,10 @@ function handleMessage(message) {
       break;
 
     case 'speech_done':
-      if (!player.playing) setState(recording ? 'listening' : 'idle', recording ? 'Listening' : 'Ready');
+      if (!player.playing) {
+        if (recording) setState('listening', 'Listening');
+        else restIdle();
+      }
       break;
 
     case 'interrupted':
@@ -289,7 +296,8 @@ function handleMessage(message) {
     case 'error':
       toast(message.message, 'error');
       if (message.fatal) stopRecording({ silent: true });
-      else setState(recording ? 'listening' : 'idle', recording ? 'Listening' : 'Ready');
+      else if (recording) setState('listening', 'Listening');
+      else restIdle();
       break;
   }
 }
@@ -362,7 +370,7 @@ async function stopRecording({ silent = false } = {}) {
   socket = null;
   if (player) player.flush();
   clearLive();
-  setState('idle', 'Ready');
+  restIdle();
   if (!silent) loadHistory();
 }
 
@@ -398,6 +406,7 @@ function submitSettings(event) {
 
   if (!saveKeys(keys)) return;
   ui.settings.close();
+  if (!recording) restIdle();
   toast(
     Object.keys(keys).length
       ? 'Saved on this device.'
@@ -412,6 +421,7 @@ function forgetKeys() {
     if (field) field.value = '';
   });
   saveKeys({});
+  if (!recording) restIdle();
   toast('Keys removed from this browser.');
 }
 
@@ -437,5 +447,5 @@ window.addEventListener('beforeunload', () => {
 
 sessionId();
 loadHistory();
-setState('idle', 'Ready');
+restIdle();
 if (missingKeys().length) openSettings();

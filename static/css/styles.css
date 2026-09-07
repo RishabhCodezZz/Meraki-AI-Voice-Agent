@@ -16,6 +16,8 @@
   --accent-strong: #d1232c;
   --on-accent: #ffffff;
   --accent-soft: rgba(232, 67, 74, 0.13);
+  --ok: #3ddc84;
+  --ok-soft: rgba(61, 220, 132, 0.16);
   --bar-idle: #212b31;
 
   --radius: 12px;
@@ -143,6 +145,11 @@ body[data-state="speaking"]::before { opacity: 1; }
   background: var(--text-faint);
   transition: background 240ms ease, box-shadow 240ms ease;
 }
+.chip__dot[data-state="idle"] {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-soft);
+}
+.chip__dot[data-state="blocked"] { background: var(--accent); }
 .chip__dot[data-state="listening"],
 .chip__dot[data-state="speaking"] {
   background: var(--accent);
@@ -150,6 +157,12 @@ body[data-state="speaking"]::before { opacity: 1; }
 }
 .chip__dot[data-state="thinking"] { background: var(--accent); opacity: 0.55; }
 .chip__dot[data-state="connecting"] { animation: blink 1s steps(2) infinite; }
+
+/* Blocked is a state you must act on, so say so in the chip itself. */
+.chip--status[data-state="blocked"] {
+  color: var(--accent);
+  border-color: rgba(232, 67, 74, 0.35);
+}
 
 @keyframes blink { 50% { opacity: 0.2; } }
 
@@ -161,8 +174,8 @@ body[data-state="speaking"]::before { opacity: 1; }
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 18px;
-  padding: 20px 24px 24px;
+  gap: 14px;
+  padding: 10px 24px 16px;
   text-align: center;
 }
 
@@ -197,9 +210,14 @@ body[data-state="speaking"]::before { opacity: 1; }
 
 .live {
   max-width: 660px;
+  width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  justify-content: center;
+  gap: 6px;
+  /* Reserved, not collapsed. Showing and hiding this shoved the whole page
+     down every time Meraki started speaking and back up when it stopped. */
+  min-height: 58px;
 }
 
 .live__user {
@@ -279,15 +297,16 @@ body[data-state="speaking"]::before { opacity: 1; }
   z-index: 1;
   width: min(880px, calc(100% - 48px));
   margin: 0 auto;
+
   /* minmax(0,1fr) on the row plus min-height:0 here is what lets the body
      shrink and scroll instead of overflowing the viewport. */
   min-height: 0;
   display: flex;
   flex-direction: column;
+  margin-bottom: 14px;
   border: 1px solid var(--line-soft);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  border-bottom: 0;
-  background: linear-gradient(180deg, var(--panel) 0%, rgba(14, 19, 23, 0.55) 100%);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, var(--panel) 0%, rgba(14, 19, 23, 0.62) 100%);
   overflow: hidden;
 }
 
@@ -373,11 +392,10 @@ body[data-state="speaking"]::before { opacity: 1; }
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 26px 12px;
+  padding: 0 26px 12px;
   font-family: var(--mono);
   font-size: 10.5px;
   color: var(--text-faint);
-  border-top: 1px solid var(--line-soft);
 }
 .foot i { font-style: normal; color: var(--accent); opacity: 0.8; }
 
