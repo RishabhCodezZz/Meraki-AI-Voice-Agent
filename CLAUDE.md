@@ -100,7 +100,17 @@ use with `preview_start`.
   Never send synthetic or placeholder audio; the browser cannot tell it from
   real audio and will hang waiting for playback that never ends.
 - Never commit `.env` (gitignored). `.env.example` documents the variables.
-- Frontend is ES modules, no build step, no framework, no CDN dependencies.
+- Frontend is ES modules, no build step, no framework. The only external
+  dependency is Google Fonts (Space Grotesk + JetBrains Mono); everything else
+  is served locally.
+- **Static URLs carry `?v={{ asset_v }}`**, a token derived from the newest
+  mtime under `static/`. Without it the browser keeps its cached CSS and JS, so
+  a deploy ships new markup against old styles — which is exactly what happened
+  during the redesign and looked like the CSS being broken.
+- **The page itself never scrolls.** `body` is a five-row grid at `100dvh` with
+  the conversation on `minmax(0, 1fr)`; that row plus `min-height: 0` on `.log`
+  is what lets the transcript shrink and scroll internally while the mic stays
+  on screen. Get the row count wrong and the `1fr` lands on the stage instead.
 - Use `textContent`, not `innerHTML`, for anything model- or user-derived.
 
 ## 6. What the rewrite fixed
@@ -204,6 +214,10 @@ Not inferred - actually run:
 ## 9. Changelog
 
 - **2026-09-06** — Audited the original. 3 P0, 7 P1, 17 P2 defects documented.
+- **2026-09-07** — UI rebuilt: Space Grotesk + JetBrains Mono, technical dark
+  treatment, chip chrome. Fixed the transcript scroll (the grid had four tracks
+  for five children, so the free space went to the stage) and added asset
+  versioning so cached CSS cannot outlive a deploy.
 - **2026-09-07** — Murf's stream endpoint replaces generate: 3.2s → ~1.4s to
   first audio. Added CI (both suites plus a boot check) and 21 browser-logic
   tests via `node --test`. Tests 57 → 78.

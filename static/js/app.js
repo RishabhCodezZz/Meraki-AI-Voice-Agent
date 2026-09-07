@@ -67,6 +67,12 @@ function toast(message, kind = 'info') {
 }
 
 function addTurn(role, content) {
+  const log = ui.transcript;
+  // Measure before appending: if you have scrolled up to read something, a new
+  // turn should not yank you back down.
+  const pinned =
+    log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+
   ui.empty.hidden = true;
   const row = document.createElement('div');
   row.className = `turn turn--${role}`;
@@ -77,8 +83,8 @@ function addTurn(role, content) {
   body.className = 'turn__body';
   body.textContent = content;
   row.append(who, body);
-  ui.transcript.append(row);
-  ui.transcript.scrollTop = ui.transcript.scrollHeight;
+  log.append(row);
+  if (pinned) log.scrollTop = log.scrollHeight;
 }
 
 function showLive({ user, reply }) {

@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import re
+from pathlib import Path
 from typing import Optional
 
 import aiohttp
@@ -30,6 +31,24 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("meraki")
+
+
+def _asset_version() -> str:
+    """Cache-busting token for /static, from the newest file's mtime.
+
+    Without this the browser keeps serving the CSS and JS it already has, so a
+    deploy ships new markup against old styles. Changes on every restart, which
+    is also what you want while developing.
+    """
+    try:
+        newest = max(
+            path.stat().st_mtime
+            for path in Path("static").rglob("*")
+            if path.is_file()
+        )
+    except (OSError, ValueError):
+        return APP_VERSION
+    return f"{int(newest):x}"
 
 # One connection pool shared by every request; created on startup.
 _http: Optional[aiohttp.ClientSession] = None
@@ -92,6 +111,7 @@ async def index(request: Request):
             "request": request,
             "app_name": APP_NAME,
             "tagline": APP_TAGLINE,
+            "asset_v": _asset_version(),
             "version": APP_VERSION,
         },
     )
