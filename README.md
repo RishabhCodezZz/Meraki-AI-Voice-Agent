@@ -115,11 +115,11 @@ static/js/
 
 ```bash
 pip install pytest
-python -m pytest tests/ -q                # 64 backend
+python -m pytest tests/ -q                # 76 backend
 node --test "tests/frontend/*.test.js"    # 21 browser logic
 ```
 
-85 tests, no network and no keys, run on every push. They cover the parts where
+97 tests, no network and no keys, run on every push. They cover the parts where
 being wrong is quiet rather than loud:
 
 - **Chunk splitting** — every character survives, the first chunk stays short,
@@ -138,6 +138,9 @@ being wrong is quiet rather than loud:
   falls back rather than blanking a working key, and no module anywhere holds
   credentials. That last one is a regression guard: the original build kept a
   single global dict and handed one visitor's keys to the next.
+- **Failing loudly** — if the transcription stream drops or the event pump
+  crashes, the browser is told. Silence there would leave the UI on "Listening"
+  forever with the socket still open.
 - **Microphone capture** — the 48k→16k resampler keeps amplitude and loses no
   samples across callbacks, and full-scale input clamps instead of wrapping. A
   wrap here would be an audible click and quietly worse transcription.

@@ -121,6 +121,13 @@ use with `preview_start`.
 - **The live caption reserves its space** (`.live { min-height }`) and is never
   hidden. Toggling it shoved the whole page down the moment Meraki started
   speaking and back up when it stopped.
+- **`GET /api/history` must not create.** It uses `sessions.peek`, not `get`.
+  Creating on read meant requesting unknown ids conjured empty conversations and
+  evicted real ones out of the LRU — 40 requests to random ids wiped everyone.
+- **The speech pump must never die quietly.** `_drain_speech_events` wraps
+  `_pump_events` and reports both a crash and an unexpected `closed` as a fatal
+  frame. Without that the socket stays open, the browser keeps streaming audio,
+  and the UI sits on "Listening" forever.
 - **The page itself never scrolls.** `body` is a five-row grid at `100dvh` with
   the conversation on `minmax(0, 1fr)`; that row plus `min-height: 0` on `.log`
   is what lets the transcript shrink and scroll internally while the mic stays
@@ -228,6 +235,12 @@ Not inferred - actually run:
 ## 9. Changelog
 
 - **2026-09-06** — Audited the original. 3 P0, 7 P1, 17 P2 defects documented.
+- **2026-09-07** — Final audit. Fixed: GET /api/history created sessions and
+  evicted real ones; the speech pump could die silently leaving the UI stuck;
+  a non-object handshake crashed with AttributeError; the spacebar bypassed the
+  disabled mic button and could start two sessions. Removed an unused
+  "interrupt" message the client never sent, corrected the protocol docstring,
+  and guarded `roundRect` for Safari below 16.4. Tests 85 → 97.
 - **2026-09-07** — Status chip now reflects whether keys exist (green Ready /
   red Needs keys) instead of always claiming Ready. Stopped the layout jumping
   while speaking, and closed the conversation card off the bottom edge.

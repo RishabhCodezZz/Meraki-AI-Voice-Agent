@@ -136,6 +136,24 @@ def test_store_evicts_least_recently_used():
     assert store.get("b").turns == []  # evicted, comes back empty
 
 
+def test_reading_an_unknown_session_creates_nothing():
+    """A GET must not mutate the store."""
+    store = SessionStore(max_sessions=5)
+    store.get("real").add("user", "important")
+
+    for i in range(20):
+        assert store.peek(f"junk-{i}") is None
+
+    assert len(store) == 1
+    assert store.peek("real").turns, "a real conversation was evicted by reads"
+
+
+def test_peek_returns_an_existing_conversation():
+    store = SessionStore()
+    store.get("abc").add("user", "hello")
+    assert store.peek("abc").turns[0].content == "hello"
+
+
 def test_clear_removes_a_session():
     store = SessionStore()
     store.get("abc").add("user", "hello")

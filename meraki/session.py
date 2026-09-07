@@ -11,6 +11,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from threading import Lock
+from typing import Optional
 
 from .config import MAX_HISTORY_MESSAGES, MAX_SESSIONS, SESSION_TTL_SECONDS
 
@@ -62,6 +63,19 @@ class SessionStore:
             self._data.move_to_end(session_id)
             # Evict after inserting, so the cap holds including the new entry.
             self._evict(protect=session_id)
+            return convo
+
+    def peek(self, session_id: str) -> Optional[Conversation]:
+        """Read without creating.
+
+        A GET must not mutate the store. It used to, which meant requesting
+        unknown session ids conjured empty conversations and evicted real ones
+        straight out of the LRU.
+        """
+        with self._lock:
+            convo = self._data.get(session_id)
+            if convo is not None:
+                self._data.move_to_end(session_id)
             return convo
 
     def clear(self, session_id: str) -> bool:

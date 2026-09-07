@@ -9,6 +9,11 @@
 
 const BARS = 56;
 const EASE = 0.28;
+// Safari only gained roundRect in 16.4. This runs every frame, so a missing
+// method would throw sixty times a second and take the meter out completely.
+const HAS_ROUND_RECT =
+  typeof CanvasRenderingContext2D !== 'undefined' &&
+  typeof CanvasRenderingContext2D.prototype.roundRect === 'function';
 
 export class Visualizer {
   constructor(canvas) {
@@ -123,10 +128,14 @@ export class Visualizer {
         ctx.fillStyle = dim;
       }
 
-      const radius = Math.min(barWidth / 2, 2);
-      ctx.beginPath();
-      ctx.roundRect(x, y, barWidth, barHeight, radius);
-      ctx.fill();
+      if (HAS_ROUND_RECT) {
+        const radius = Math.min(barWidth / 2, 2);
+        ctx.beginPath();
+        ctx.roundRect(x, y, barWidth, barHeight, radius);
+        ctx.fill();
+      } else {
+        ctx.fillRect(x, y, barWidth, barHeight);
+      }
     }
 
     ctx.globalAlpha = 1;

@@ -4,9 +4,12 @@ Every frame is JSON with a ``type`` discriminator. Client frames are documented
 here too so the two halves stay in sync.
 
 Client -> server
-    {"type": "config", "session_id": str, "keys": {...}, "voice_id": str}
-    {"type": "stop"}                  user released the mic
+    {"type": "config", "session_id": str, "keys": {...}}   first frame, JSON
+    "stop"                            plain text, not JSON: user released the mic
     <binary>                          PCM16 mono @16kHz
+
+Model and voice are server-side settings; anything a client sends for them is
+ignored. Any key it omits falls back to the server's environment.
 
 Server -> client
     {"type": "ready"}                 STT connected, safe to send audio

@@ -435,10 +435,13 @@ ui.settingsForm.addEventListener('submit', submitSettings);
 ui.forgetKeys.addEventListener('click', forgetKeys);
 
 document.addEventListener('keydown', (event) => {
-  if (event.code === 'Space' && event.target === document.body) {
-    event.preventDefault();
-    toggleRecording();
-  }
+  if (event.code !== 'Space' || event.target !== document.body) return;
+  event.preventDefault();
+  // A click on a disabled button is swallowed by the browser; this path is not,
+  // so without the check a second press during "Connecting" would start a
+  // second session and orphan the first microphone stream and socket.
+  if (ui.micBtn.disabled) return;
+  toggleRecording();
 });
 
 window.addEventListener('beforeunload', () => {

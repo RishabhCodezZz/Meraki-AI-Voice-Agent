@@ -127,7 +127,8 @@ async def index(request: Request):
 
 @app.get("/api/history/{session_id}")
 async def get_history(session_id: str):
-    return {"history": [turn.as_dict() for turn in sessions.get(session_id).turns]}
+    convo = sessions.peek(session_id)
+    return {"history": [turn.as_dict() for turn in convo.turns] if convo else []}
 
 
 @app.delete("/api/history/{session_id}")
@@ -204,13 +205,14 @@ class _Connection:
         """Wait for the opening config frame carrying keys and session id."""
         try:
             message = await asyncio.wait_for(self._ws.receive_json(), timeout=15)
-        except (asyncio.TimeoutError, ValueError):
+        except (asyncio.TimeoutError, ValueError, TypeError):
             await self._send(
                 protocol.error("handshake", "Expected a config message.", fatal=True)
             )
             return False
 
-        if message.get("type") != "config":
+        # A JSON array or bare string parses fine but has no .get.
+        if not isinstance(message, dict) or message.get("type") != "config":
             await self._send(
                 protocol.error("handshake", "First message must be config.", fatal=True)
             )
@@ -255,12 +257,26 @@ class _Connection:
             if text == "stop":
                 logger.info("Session %s stopped recording", self._session_id)
                 break
-            if text == "interrupt":
-                await self._cancel_turn(notify=True)
 
     async def _drain_speech_events(self) -> None:
-        """Move STT events onto the socket and kick off turns."""
+        """Move STT events onto the socket and kick off turns.
+
+        Wrapped because this task is the only thing feeding the conversation: if
+        it dies the socket stays open, the browser keeps sending audio, and the
+        UI sits on "Listening" forever with no clue anything is wrong.
+        """
         assert self._speech is not None
+        try:
+            await self._pump_events()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - must reach the browser, not a log
+            logger.exception("Speech event pump failed")
+            await self._send(
+                protocol.error("stt", "Lost the transcription stream.", fatal=True)
+            )
+
+    async def _pump_events(self) -> None:
         while True:
             event = await self._speech.events.get()
             kind = event.get("kind")
@@ -287,6 +303,14 @@ class _Connection:
                 await self._send(protocol.error("stt", event.get("message", "")))
 
             elif kind == "closed":
+                # Teardown cancels this task before closing the stream, so
+                # reaching here means Deepgram went away on its own.
+                logger.warning("Session %s lost its transcription stream", self._session_id)
+                await self._send(
+                    protocol.error(
+                        "stt", "The transcription stream ended.", fatal=True
+                    )
+                )
                 break
 
     # -- turns --------------------------------------------------------------
