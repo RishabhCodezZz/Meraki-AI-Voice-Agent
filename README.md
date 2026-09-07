@@ -44,13 +44,7 @@ Then open **http://127.0.0.1:8000**.
 
 ### Keys
 
-Copy `.env.example` to `.env` and fill in three values:
-
-```
-DEEPGRAM_API_KEY=
-OLLAMA_API_KEY=
-MURF_API_KEY=
-```
+Three services, each load-bearing: Deepgram listens, Ollama thinks, Murf speaks.
 
 | Key | From | Free tier |
 |---|---|---|
@@ -58,13 +52,21 @@ MURF_API_KEY=
 | Ollama | [ollama.com/settings/keys](https://ollama.com/settings/keys) | covers the model below |
 | Murf | [murf.ai](https://murf.ai/api/docs/introduction/overview) | trial credits |
 
-Keys are read from the environment at startup. The browser is never asked for
-them and never sends any — anything a client puts in the handshake is ignored.
-On Render, set the same three as environment variables in the dashboard.
+There are two ways to supply them, and they compose:
 
-Note that this means whoever opens the page spends *your* credits, which is the
-right trade while developing and the wrong one for a public link. Bring-your-own
-key is in git history and can come back before this is hosted again.
+**In the browser.** Click **Keys**, paste, save. They are stored in that
+browser's `localStorage` and sent once, in the opening frame of that visitor's
+own WebSocket. The server holds them on the connection object and writes them
+nowhere, so two people using the same deployment can never see or spend each
+other's credits.
+
+**On the server.** Copy `.env.example` to `.env` (or set them in Render's
+dashboard) and any key a visitor leaves blank falls back to yours.
+
+A visitor's key always beats the server's, so someone who brings their own
+spends their own quota. Deploy with no keys set and every visitor must bring
+their own; deploy with them set and the page works on first click — at your
+expense.
 
 Press **Start talking** and speak. Interrupt it whenever you like — it stops.
 
@@ -111,11 +113,11 @@ static/js/
 
 ```bash
 pip install pytest
-python -m pytest tests/ -q          # 57 backend
-node --test "tests/frontend/*.test.js"   # 21 browser logic
+python -m pytest tests/ -q                # 64 backend
+node --test "tests/frontend/*.test.js"    # 21 browser logic
 ```
 
-78 tests, no network and no keys, run on every push. They cover the parts where
+85 tests, no network and no keys, run on every push. They cover the parts where
 being wrong is quiet rather than loud:
 
 - **Chunk splitting** — every character survives, the first chunk stays short,
@@ -130,6 +132,10 @@ being wrong is quiet rather than loud:
   does not leak internal detail into a user-facing message.
 - **The Murf request shape** — the streaming endpoint is used and an unsupported
   style is dropped and retried rather than failing the turn.
+- **Key isolation** — a visitor's key overrides the server's, a blank field
+  falls back rather than blanking a working key, and no module anywhere holds
+  credentials. That last one is a regression guard: the original build kept a
+  single global dict and handed one visitor's keys to the next.
 - **Microphone capture** — the 48k→16k resampler keeps amplitude and loses no
   samples across callbacks, and full-scale input clamps instead of wrapping. A
   wrap here would be an audible click and quietly worse transcription.
@@ -194,5 +200,6 @@ synchronous `stream()` call forced a worker thread, a blocking queue, and a
 thread-safe event bridge; switching providers deleted all three.
 
 **Credentials scoped to a connection.** Keys arrive in the opening frame and
-live only on the connection object. There is no module-level key state, so
-concurrent visitors cannot see or spend each other's credits.
+live only on the connection object — frozen, and never assigned to module state.
+Verified end to end: with two sockets open at once, a bad key fails its own
+session while the other stays connected and working.

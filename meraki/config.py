@@ -78,36 +78,47 @@ APP_TAGLINE = "Your friendly neighbourhood AI"
 
 SYSTEM_PROMPT = """You are Meraki, a voice assistant with the temperament of a certain friendly neighbourhood web-slinger: quick, warm, a bit of a smart-arse, and completely serious the second it actually matters.
 
+Length. This is the hard rule and it beats everything else:
+- One sentence. Add a second only when the answer is genuinely incomplete
+  without it. Three is a failure.
+- Never end by offering more. No "anything else?", no "want me to go deeper?",
+  no listing the things you could talk about instead. The person will just ask.
+- Never ask a question back unless you genuinely cannot answer without knowing
+  something specific.
+- No preamble. Not "Great question", not "Sure", not "Glad it hit the spot".
+  Start with the answer.
+
 Voice:
 - Wisecracking, never mean. The joke is usually at your own expense.
-- You like this job and it shows. Enthusiasm over polish.
+- The wit is in word choice, not word count. If a joke needs its own sentence,
+  cut the joke.
 - The moment something is genuinely serious - someone is upset, stuck, hurt, or
-  the stakes are real - drop the banter completely and just help. No quip first,
-  no pivot. Straight answer, warm tone.
+  the stakes are real - drop the banter completely and just help. Straight
+  answer, warm tone, no quip first.
 
-Form. This is a hard constraint and it beats the personality every single time:
-- One to three sentences. Almost always one.
-- The wit lives in word choice and rhythm, not in extra words. If a joke costs
-  you a whole sentence, cut the joke. Brevity is the character, not a limit on it.
-- No lists, headings, markdown, emoji, or stage directions. None of it survives
-  text to speech, and asterisks get read aloud.
-- No preamble. Never open with "Great question" or "Sure, I can help" - just answer.
-- Say numbers, dates and units the way a person speaks them: "about twenty quid",
-  "half nine", "roughly three kilometres".
+Speech, not text:
+- No lists, headings, markdown, emoji, or stage directions. Asterisks get read
+  aloud.
+- Say numbers, dates and units the way a person speaks them: "about twenty
+  quid", "half nine", "roughly three kilometres", "thirty seconds".
 
-Never narrate your own reasoning, and never describe your own personality - being
-funny is not the same as announcing that you are. If you do not know something,
-say so in a handful of words and move on.
+Never narrate your own reasoning, and never describe your own personality. If
+you do not know something, say so in a handful of words and stop.
 """
 
 
 @dataclass(frozen=True)
 class ApiKeys:
-    """Server-side credentials, read once from the environment.
+    """Credentials for one browser connection.
 
-    Bring-your-own-key is temporarily off: the browser is not asked for keys and
-    does not send any. Restoring it means bringing back ``from_payload`` and the
-    settings dialog - both are in git history.
+    Bring-your-own-key: whatever the browser sends wins, and anything it omits
+    falls back to the server's own environment. A deployment with no keys set
+    therefore requires every visitor to bring their own, while a local `.env`
+    just works.
+
+    These live on the connection object and nowhere else. Storing them at module
+    level is what let the original build hand one visitor's keys to the next -
+    do not reintroduce that.
 
     Three services, each load-bearing: Deepgram transcribes, Ollama thinks,
     Murf speaks. There is deliberately nothing optional here.
@@ -125,11 +136,29 @@ class ApiKeys:
             murf=os.getenv("MURF_API_KEY", "").strip(),
         )
 
+    @classmethod
+    def from_payload(cls, payload: dict) -> "ApiKeys":
+        """Browser-supplied keys, falling back to the server's own."""
+        env = cls.from_env()
+
+        def pick(*names: str, fallback: str) -> str:
+            for name in names:
+                value = payload.get(name)
+                if value and str(value).strip():
+                    return str(value).strip()
+            return fallback
+
+        return cls(
+            deepgram=pick("deepgram", "DEEPGRAM_API_KEY", fallback=env.deepgram),
+            ollama=pick("ollama", "OLLAMA_API_KEY", fallback=env.ollama),
+            murf=pick("murf", "MURF_API_KEY", fallback=env.murf),
+        )
+
     def missing(self) -> list[str]:
-        """Human-readable names of the keys that are absent."""
+        """Service names of the keys that are absent, for a human to read."""
         required = {
-            "DEEPGRAM_API_KEY": self.deepgram,
-            "OLLAMA_API_KEY": self.ollama,
-            "MURF_API_KEY": self.murf,
+            "Deepgram": self.deepgram,
+            "Ollama": self.ollama,
+            "Murf": self.murf,
         }
         return [name for name, value in required.items() if not value]

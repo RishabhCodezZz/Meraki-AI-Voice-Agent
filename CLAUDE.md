@@ -50,12 +50,15 @@ use with `preview_start`.
 
 ## 4. Architecture facts — read before changing anything
 
-- **Keys come from the environment**, read at handshake via `ApiKeys.from_env()`.
-  Bring-your-own-key is temporarily off while developing; the browser is not
-  asked and any `keys` it sends are ignored. Restoring BYO means bringing back
-  `from_payload` and the settings dialog, both in git history — and it must stay
-  per-connection, never module-level, or the cross-user leak in §6 returns.
-  While BYO is off, every visitor spends the deploy owner's credits.
+- **Keys are bring-your-own, resolved per connection.** `ApiKeys.from_payload`
+  takes whatever the browser sent and falls back to the environment for anything
+  omitted, so a visitor's key beats the server's and a blank field does not blank
+  a working one. The result lives on `_Connection` and is frozen. **Never assign
+  keys to module state** — one global dict is exactly the cross-user leak in §6,
+  and `test_no_module_holds_keys_of_its_own` guards against it returning.
+- **The page knows whether it must demand keys.** `keys_required` is passed to
+  the template from `ApiKeys.from_env().missing()`, so a deployment with its own
+  keys does not shove a dialog at first-time visitors.
 - **`ready` means everything is up**, including the Deepgram socket. It is sent
   after STT connects, not during the handshake — otherwise the browser goes and
   asks for microphone permission before we know the STT key is even valid.
@@ -195,8 +198,8 @@ Not inferred - actually run:
   instant the user stops talking would hang. The mic streams continuously, so
   this holds - but it is worth knowing.
 - Ollama replied in 207ms with the persona intact (one sentence, no preamble).
-- Murf returned inline base64 with `Conversational` at 24kHz, confirming
-  `encodeAsBase64` works and removing the download round trip.
+- Murf's stream endpoint returns audio in 150-280ms against 2865ms for
+  `/v1/speech/generate` on identical text.
 - A full `TurnPipeline` run: 0.6s to first token, 3.2s to first audio.
 
 ## 8. Open items
@@ -214,6 +217,9 @@ Not inferred - actually run:
 ## 9. Changelog
 
 - **2026-09-06** — Audited the original. 3 P0, 7 P1, 17 P2 defects documented.
+- **2026-09-07** — Bring-your-own-key restored, per connection, with the server
+  as fallback. Tightened the persona: replies were drifting into three sentences
+  and trailing "anything else?" offers. Tests 78 → 85.
 - **2026-09-07** — UI rebuilt: Space Grotesk + JetBrains Mono, technical dark
   treatment, chip chrome. Fixed the transcript scroll (the grid had four tracks
   for five children, so the free space went to the stage) and added asset

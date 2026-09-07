@@ -36,6 +36,13 @@
         <span id="status-dot" class="chip__dot" data-state="idle" aria-hidden="true"></span>
         <span id="status">Ready</span>
       </span>
+      <button id="settings-btn" class="chip chip--btn" type="button">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <circle cx="12" cy="12" r="3.2" />
+          <path d="M12 2.6v3M12 18.4v3M21.4 12h-3M5.6 12h-3M18.6 5.4l-2.1 2.1M7.5 16.5l-2.1 2.1M18.6 18.6l-2.1-2.1M7.5 7.5 5.4 5.4" />
+        </svg>
+        <span>Keys</span>
+      </button>
     </div>
   </header>
 
@@ -77,8 +84,56 @@
     <span class="foot__right">v{{ version }}</span>
   </footer>
 
+  <dialog id="settings" class="sheet">
+    <form id="settings-form" method="dialog" class="sheet__form">
+      <div class="sheet__head">
+        <h2>Your API keys</h2>
+        <button id="close-settings" class="ghost" type="button">Close</button>
+      </div>
+
+      <p class="sheet__note">
+        Stored in this browser and sent only to your own session. The server
+        keeps them on the connection and never writes them down, so nobody else
+        can see or spend them.
+      </p>
+
+      <label class="field">
+        <span class="field__label">Deepgram <em>speech to text</em></span>
+        <input id="key-deepgram" type="password" autocomplete="off" spellcheck="false" placeholder="dg_..." />
+        <a class="field__get" href="https://console.deepgram.com/signup" target="_blank" rel="noopener noreferrer">Get one</a>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Ollama <em>language model</em></span>
+        <input id="key-ollama" type="password" autocomplete="off" spellcheck="false" placeholder="Required" />
+        <a class="field__get" href="https://ollama.com/settings/keys" target="_blank" rel="noopener noreferrer">Get one</a>
+      </label>
+
+      <label class="field">
+        <span class="field__label">Murf <em>text to speech</em></span>
+        <input id="key-murf" type="password" autocomplete="off" spellcheck="false" placeholder="ap2_..." />
+        <a class="field__get" href="https://murf.ai/api/docs/introduction/overview" target="_blank" rel="noopener noreferrer">Get one</a>
+      </label>
+
+      {% if keys_required %}
+      <p class="sheet__hint">All three are free to sign up for. Nothing works without them.</p>
+      {% else %}
+      <p class="sheet__hint">
+        This server has its own keys, so you can leave these blank and just talk.
+        Fill any of them in to use your own quota instead.
+      </p>
+      {% endif %}
+
+      <div class="sheet__actions">
+        <button id="forget-keys" class="ghost" type="button">Forget</button>
+        <button type="submit" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
   <div id="toasts" class="toasts" aria-live="assertive"></div>
 
+  <script>window.MERAKI_KEYS_REQUIRED = {{ "true" if keys_required else "false" }};</script>
   <script type="module" src="/static/js/app.js?v={{ asset_v }}"></script>
 </body>
 </html>

@@ -2,6 +2,12 @@ import { MicCapture } from './audio-capture.js';
 import { SpeechPlayer } from './audio-player.js';
 import { Visualizer } from './visualizer.js';
 
+const KEY_FIELDS = ['deepgram', 'ollama', 'murf'];
+const STORAGE_KEYS = 'meraki.keys';
+// The server tells us whether it has keys of its own. If it does, visitors can
+// just talk; if not, they must bring their own.
+const KEYS_REQUIRED = window.MERAKI_KEYS_REQUIRED !== false;
+
 const el = (id) => document.getElementById(id);
 
 const ui = {
@@ -17,6 +23,11 @@ const ui = {
   transcript: el('transcript'),
   empty: el('empty'),
   clearBtn: el('clear-btn'),
+  settings: el('settings'),
+  settingsForm: el('settings-form'),
+  settingsBtn: el('settings-btn'),
+  closeSettings: el('close-settings'),
+  forgetKeys: el('forget-keys'),
   toasts: el('toasts'),
 };
 
@@ -40,6 +51,39 @@ function sessionId() {
     history.replaceState({}, '', url);
   }
   return id;
+}
+
+// --- keys --------------------------------------------------------------------
+// Kept in this browser only. They are sent once, in the opening frame of your
+// own WebSocket, and the server holds them on that connection alone.
+
+function loadKeys() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEYS)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveKeys(keys) {
+  try {
+    if (Object.keys(keys).length) {
+      localStorage.setItem(STORAGE_KEYS, JSON.stringify(keys));
+    } else {
+      localStorage.removeItem(STORAGE_KEYS);
+    }
+    return true;
+  } catch {
+    toast('This browser will not let the page store anything.', 'error');
+    return false;
+  }
+}
+
+/** Which required keys we have neither locally nor on the server. */
+function missingKeys() {
+  if (!KEYS_REQUIRED) return [];
+  const keys = loadKeys();
+  return KEY_FIELDS.filter((name) => !keys[name]);
 }
 
 // --- chrome ------------------------------------------------------------------
@@ -160,6 +204,7 @@ function connect() {
         JSON.stringify({
           type: 'config',
           session_id: sessionId(),
+          keys: loadKeys(),
         })
       );
     };
@@ -252,6 +297,12 @@ function handleMessage(message) {
 // --- recording ---------------------------------------------------------------
 
 async function startRecording() {
+  if (missingKeys().length) {
+    toast('Add your API keys to get started.', 'error');
+    openSettings();
+    return;
+  }
+
   setState('connecting', 'Connecting');
   ui.micBtn.disabled = true;
 
@@ -320,10 +371,58 @@ function toggleRecording() {
   else startRecording();
 }
 
+// --- settings ----------------------------------------------------------------
+
+function openSettings() {
+  const keys = loadKeys();
+  KEY_FIELDS.forEach((name) => {
+    const field = el(`key-${name}`);
+    if (field) field.value = keys[name] || '';
+  });
+  ui.settings.showModal();
+}
+
+function submitSettings(event) {
+  event.preventDefault();
+  const keys = {};
+  KEY_FIELDS.forEach((name) => {
+    const value = el(`key-${name}`).value.trim();
+    if (value) keys[name] = value;
+  });
+
+  const missing = KEY_FIELDS.filter((name) => !keys[name]);
+  if (KEYS_REQUIRED && missing.length) {
+    toast('Deepgram, Ollama and Murf keys are all required here.', 'error');
+    return;
+  }
+
+  if (!saveKeys(keys)) return;
+  ui.settings.close();
+  toast(
+    Object.keys(keys).length
+      ? 'Saved on this device.'
+      : 'Cleared. Falling back to the server keys.'
+  );
+  if (recording) toast('New keys apply next time you start.');
+}
+
+function forgetKeys() {
+  KEY_FIELDS.forEach((name) => {
+    const field = el(`key-${name}`);
+    if (field) field.value = '';
+  });
+  saveKeys({});
+  toast('Keys removed from this browser.');
+}
+
 // --- boot --------------------------------------------------------------------
 
 ui.micBtn.addEventListener('click', toggleRecording);
 ui.clearBtn.addEventListener('click', clearHistory);
+ui.settingsBtn.addEventListener('click', openSettings);
+ui.closeSettings.addEventListener('click', () => ui.settings.close());
+ui.settingsForm.addEventListener('submit', submitSettings);
+ui.forgetKeys.addEventListener('click', forgetKeys);
 
 document.addEventListener('keydown', (event) => {
   if (event.code === 'Space' && event.target === document.body) {
@@ -339,3 +438,4 @@ window.addEventListener('beforeunload', () => {
 sessionId();
 loadHistory();
 setState('idle', 'Ready');
+if (missingKeys().length) openSettings();

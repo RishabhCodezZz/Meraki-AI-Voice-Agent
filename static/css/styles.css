@@ -400,6 +400,105 @@ body[data-state="speaking"]::before { opacity: 1; }
 }
 .ghost:hover { color: var(--text); border-color: #2c3a42; background: var(--panel-2); }
 
+/* ---------- settings sheet ---------- */
+
+.chip--btn {
+  cursor: pointer;
+  font-family: var(--mono);
+  transition: color 160ms ease, border-color 160ms ease;
+}
+.chip--btn:hover { color: var(--text); border-color: #2c3a42; }
+.chip--btn svg { display: block; opacity: 0.8; }
+
+.sheet {
+  width: min(440px, calc(100% - 28px));
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  color: var(--text);
+}
+.sheet::backdrop { background: rgba(3, 5, 6, 0.76); backdrop-filter: blur(3px); }
+
+.sheet__form { display: flex; flex-direction: column; gap: 15px; padding: 20px; }
+
+.sheet__head { display: flex; align-items: center; justify-content: space-between; }
+.sheet__head h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.sheet__note,
+.sheet__hint {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+.sheet__hint { padding-top: 13px; border-top: 1px solid var(--line-soft); }
+
+.sheet__actions { display: flex; gap: 10px; align-items: center; }
+.sheet__actions .primary { flex: 1; }
+
+.field { display: flex; flex-direction: column; gap: 6px; position: relative; }
+
+.field__label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.field__label em {
+  font-style: normal;
+  color: var(--text-faint);
+  font-weight: 400;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  margin-left: 6px;
+}
+
+.field input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+  transition: border-color 160ms ease;
+}
+.field input:focus { outline: none; border-color: var(--accent); }
+.field input::placeholder { color: var(--text-faint); }
+
+.field__get {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  text-decoration: none;
+}
+.field__get:hover { color: var(--accent); }
+
+.primary {
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--accent-strong);
+  color: var(--on-accent);
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: filter 160ms ease;
+}
+.primary:hover { filter: brightness(1.1); }
+
 /* ---------- toasts ---------- */
 
 .toasts {

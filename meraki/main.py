@@ -88,7 +88,10 @@ async def _lifespan(_app: FastAPI):
     logger.info("%s v%s ready", APP_NAME, APP_VERSION)
     # Say so at boot rather than letting the first visitor discover it.
     if missing := ApiKeys.from_env().missing():
-        logger.warning("Not configured: %s. Conversations will fail.", ", ".join(missing))
+        logger.warning(
+            "No server key for: %s. Visitors must supply their own in Settings.",
+            ", ".join(missing),
+        )
     yield
     await _http.close()
 
@@ -112,6 +115,8 @@ async def index(request: Request):
             "app_name": APP_NAME,
             "tagline": APP_TAGLINE,
             "asset_v": _asset_version(),
+            # Lets the page decide whether to demand keys up front.
+            "keys_required": bool(ApiKeys.from_env().missing()),
             "version": APP_VERSION,
         },
     )
@@ -208,12 +213,13 @@ class _Connection:
             )
             return False
 
-        self._keys = ApiKeys.from_env()
+        # Scoped to this connection. Never assign keys to module state.
+        self._keys = ApiKeys.from_payload(message.get("keys") or {})
         if missing := self._keys.missing():
             await self._send(
                 protocol.error(
                     "keys",
-                    f"Server is missing {', '.join(missing)} in its environment.",
+                    f"Missing {', '.join(missing)}. Add it under Settings.",
                     fatal=True,
                 )
             )
