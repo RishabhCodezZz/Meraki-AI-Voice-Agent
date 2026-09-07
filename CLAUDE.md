@@ -6,6 +6,11 @@ Guidance for Claude Code in this repo. Keep it current as the project changes.
 
 ## 1. What this is
 
+Live at https://meraki-ai-voice-agent.onrender.com (free instance, sleeps after
+15 minutes idle; a cold start takes 30-60s and Render's edge answers 404 with
+`x-render-routing: no-server` while the container boots, rather than holding the
+request — that is normal and not a failed deploy).
+
 A real-time voice agent. Rewritten from scratch in v3.0.0 (see §6 for what the
 original looked like and why none of it survived).
 
@@ -63,6 +68,10 @@ use with `preview_start`.
   it costs nothing to run and every visitor spends their own free tier. Missing
   all three logs at INFO, not WARNING — that is the intended posture. *Partially*
   configured logs a warning, because it is nearly always a mistake.
+- **Deploy via Blueprint, not the manual web-service form.** The form pre-fills
+  `gunicorn your_application.wsgi`, which cannot run an ASGI app, and its health
+  check placeholder is `/healthz` where this serves `/health`. `render.yaml` gets
+  all of it right; changing it and pushing updates the deployment.
 - **`ready` means everything is up**, including the Deepgram socket. It is sent
   after STT connects, not during the handshake — otherwise the browser goes and
   asks for microphone permission before we know the STT key is even valid.
@@ -233,6 +242,9 @@ Not inferred - actually run:
 - `looks_like_echo` lives in `main.py`; if that file grows it wants its own home.
 
 ## 9. Changelog
+
+- **2026-09-07** — Deployed. Verified live over `wss://`: keyless handshake,
+  bogus-key rejection and malformed-frame handling all correct, ~1.1s round trip.
 
 - **2026-09-06** — Audited the original. 3 P0, 7 P1, 17 P2 defects documented.
 - **2026-09-07** — Final audit. Fixed: GET /api/history created sessions and

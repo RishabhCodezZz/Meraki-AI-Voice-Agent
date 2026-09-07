@@ -1,6 +1,14 @@
 # Meraki
 
+**[Try it live →](https://meraki-ai-voice-agent.onrender.com)** &nbsp;·&nbsp;
 [![CI](https://github.com/RishabhCodezZz/Meraki-AI-Voice-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/RishabhCodezZz/Meraki-AI-Voice-Agent/actions/workflows/ci.yml)
+
+> Hosted on a free instance, which sleeps after 15 minutes idle — the first load
+> can take 30–60 seconds to wake. It is not broken, it is yawning.
+>
+> The demo sets no server keys, so it asks for your own. All three are free to
+> sign up for and the dialog links straight to each one; nothing is stored
+> anywhere but your browser.
 
 Your friendly neighbourhood AI — a real-time voice agent that talks back before
 it has finished thinking.
@@ -31,7 +39,7 @@ It also listens while it speaks. Start talking over Meraki and the in-flight
 turn is cancelled mid-request, queued audio is dropped, and it starts listening
 to you instead.
 
-## Running it
+## Running it yourself
 
 ```bash
 git clone https://github.com/RishabhCodezZz/Meraki-AI-Voice-Agent.git
@@ -69,6 +77,9 @@ spends their own quota.
 **The hosted version sets no server keys**, so it costs nothing to run and every
 visitor uses their own free tier. The dialog opens by itself on first visit and
 links to all three signup pages.
+
+Deployed from `render.yaml` as a Render Blueprint — the start command, health
+check and Python version all come from the repo rather than a dashboard form.
 
 Press **Start talking** and speak. Interrupt it whenever you like — it stops.
 
