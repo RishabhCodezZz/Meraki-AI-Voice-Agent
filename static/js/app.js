@@ -1,5 +1,6 @@
 import { MicCapture } from './audio-capture.js';
 import { SpeechPlayer } from './audio-player.js';
+import { PlaybackGate } from './playback-gate.js';
 import { Visualizer } from './visualizer.js';
 
 const KEY_FIELDS = ['deepgram', 'ollama', 'murf'];
@@ -37,6 +38,7 @@ visualizer.start();
 let socket = null;
 let mic = null;
 let player = null;
+let gate = null;
 let recording = false;
 let replyBuffer = '';
 
@@ -258,6 +260,7 @@ function handleMessage(message) {
       break;
 
     case 'thinking':
+      gate.turnStarted();
       setState('thinking', 'Thinking');
       break;
 
@@ -280,13 +283,13 @@ function handleMessage(message) {
       break;
 
     case 'speech_done':
-      if (!player.playing) {
-        if (recording) setState('listening', 'Listening');
-        else restIdle();
-      }
+      // Sent right behind the last audio frame, usually before it has played;
+      // the gate waits for the player to run dry before settling.
+      gate.turnEnded();
       break;
 
     case 'interrupted':
+      gate.cancel();
       player.flush();
       replyBuffer = '';
       showLive({ reply: '' });
@@ -295,9 +298,18 @@ function handleMessage(message) {
 
     case 'error':
       toast(message.message, 'error');
-      if (message.fatal) stopRecording({ silent: true });
-      else if (recording) setState('listening', 'Listening');
-      else restIdle();
+      if (message.fatal) {
+        gate.cancel();
+        stopRecording({ silent: true });
+      } else if (gate.turnOpen) {
+        // The turn is over without (more) audio; settle once what is queued
+        // has played.
+        gate.turnEnded();
+      } else if (recording) {
+        setState('listening', 'Listening');
+      } else {
+        restIdle();
+      }
       break;
   }
 }
@@ -317,8 +329,13 @@ async function startRecording() {
   try {
     player = player || new SpeechPlayer({
       onLevel: (bins) => visualizer.setSpectrum(bins),
-      onIdle: () => {
+      onIdle: () => gate.playerIdle(),
+    });
+    gate = gate || new PlaybackGate({
+      isPlaying: () => player.playing,
+      onSettled: () => {
         if (recording) setState('listening', 'Listening');
+        else restIdle();
       },
     });
     // Unlock playback inside the click gesture, for Safari's autoplay policy.
@@ -368,6 +385,7 @@ async function stopRecording({ silent = false } = {}) {
     socket.close();
   }
   socket = null;
+  if (gate) gate.cancel();
   if (player) player.flush();
   clearLive();
   restIdle();
