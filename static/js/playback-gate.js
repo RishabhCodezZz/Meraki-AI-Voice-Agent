@@ -27,6 +27,9 @@ export class PlaybackGate {
 
   /** The server has sent every chunk for this turn. */
   turnEnded() {
+    // A failed synthesis sends error(tts) and then speech_done for one turn;
+    // the second must not settle a turn that has already settled.
+    if (!this.turnOpen && !this.awaitingSettle) return;
     this.turnOpen = false;
     this.awaitingSettle = true;
     this.check();

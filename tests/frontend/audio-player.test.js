@@ -84,6 +84,7 @@ class FakeContext {
 globalThis.AudioContext = FakeContext;
 
 const { SpeechPlayer } = await import('../../static/js/audio-player.js');
+const { PlaybackGate } = await import('../../static/js/playback-gate.js');
 
 /** base64 for n bytes, i.e. n seconds of fake audio. */
 const audio = (seconds) => Buffer.alloc(seconds, 1).toString('base64');
@@ -358,15 +359,47 @@ test('reports idle when the last chunk is dropped after earlier audio has finish
   assert.equal(player.playing, false);
 });
 
-test('flush does not report idle', async () => {
+test('flush itself does not report idle', async () => {
   let idle = 0;
   const player = await manualPlayer(() => idle++);
   const a = player.enqueue(audio(1));
   await tick();
   player.flush();
+  assert.equal(idle, 0, 'the interrupt already told the UI what state it is in');
   settleDecode(1);
   await a;
-  assert.equal(idle, 0, 'the interrupt already told the UI what state it is in');
+});
+
+test('a stale decode finishing after a flush still lets the next turn settle', async () => {
+  // The old reply's chunk is mid-decode when the user barges in, and the next
+  // turn ends while that stale task still holds `pending` above zero. Nothing
+  // plays, so nothing fires onended: if the stale task stays silent the gate
+  // waits for an idle signal that never comes and the UI is stuck on Speaking.
+  let idle = 0;
+  let settled = 0;
+  let gate;
+  const player = await manualPlayer(() => {
+    idle++;
+    gate.playerIdle();
+  });
+  gate = new PlaybackGate({ isPlaying: () => player.playing, onSettled: () => settled++ });
+
+  const stale = player.enqueue(audio(1));
+  await tick();
+  player.flush(); // barge-in
+  gate.cancel();
+
+  gate.turnStarted(); // the next turn ends without audio of its own
+  gate.turnEnded();
+  assert.equal(player.playing, true, 'the stale task is still counted');
+  assert.equal(settled, 0);
+
+  settleDecode(1);
+  await stale;
+  assert.equal(idle, 1, 'the player reports quiet once the stale task is gone');
+  assert.equal(settled, 1, 'and the gate, which was waiting on it, settles');
+  assert.equal(player.playing, false);
+  assert.equal(ctx.started.length, 0);
 });
 
 test('a suspended context is resumed before scheduling', async () => {

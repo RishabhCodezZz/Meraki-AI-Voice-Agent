@@ -90,3 +90,13 @@ test('an idle signal with no finished turn behind it settles nothing', () => {
   gate.playerIdle();
   assert.equal(state.settled, 1, 'the turn already settled');
 });
+
+test('a second turnEnded after settling does not settle again', () => {
+  // A failed synthesis sends error(tts) and then speech_done for the same turn.
+  // Both end the turn, and the UI must only be told once.
+  const { state, gate } = rig();
+  gate.turnStarted();
+  gate.turnEnded();
+  gate.turnEnded();
+  assert.equal(state.settled, 1);
+});

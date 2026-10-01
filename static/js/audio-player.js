@@ -56,8 +56,11 @@ export class SpeechPlayer {
       .finally(() => {
         this.pending--;
         // The last chunk may have been dropped with nothing playing to fire
-        // onended, and someone is waiting to hear that we are done.
-        if (generation === this.generation) this.settleIfIdle();
+        // onended, and someone is waiting to hear that we are done. That holds
+        // for a task from before a flush too: it can be the last thing keeping
+        // `pending` up while the next turn's end waits on us, and a gate that
+        // is not waiting ignores the signal anyway.
+        this.settleIfIdle();
       });
     // One bad chunk must not poison the chain behind it.
     this.tail = task.catch(() => {});
