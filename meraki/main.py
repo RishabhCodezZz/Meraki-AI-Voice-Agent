@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -57,6 +58,22 @@ _http: Optional[aiohttp.ClientSession] = None
 # syllable of echo does not cut the assistant off mid-sentence.
 BARGE_IN_MIN_WORDS = 2
 
+# A transcript needs at least this many words to count as echo. A lone "no" or
+# "yes" is a plausible real answer, and one word is too little to be sure of.
+ECHO_MIN_WORDS = 2
+
+# How fast Murf's voice speaks, in characters of text per second. Used to guess
+# when the audio will have finished playing; deliberately a little slow so the
+# window errs towards ignoring echo a moment longer rather than a moment less.
+ECHO_CHARS_PER_SECOND = 12.0
+
+# Echo is still arriving this long after the speech ends: room reverb, the
+# output buffer, and Deepgram's own latency.
+ECHO_GRACE_SECONDS = 2.0
+
+# Tests replace this to control the clock.
+_now = time.monotonic
+
 _WORDS = re.compile(r"[a-z0-9']+")
 
 
@@ -72,13 +89,20 @@ def looks_like_echo(heard: str, spoken: str) -> bool:
     it speaks would fix that by removing barge-in, which is the wrong trade.
 
     Instead: we know exactly what is being said, so a transcript contained in it
-    is echo. The cost is that saying a phrase back verbatim while it is speaking
+    is echo. Matching is on whole words, so "no" is not found inside "know", and
+    needs at least ECHO_MIN_WORDS of them, so a bare "no" or "yes" always gets
+    through. The caller stops asking once the reply has finished playing (see
+    `_Connection._echo_active`), so an old reply cannot swallow a new answer.
+    The remaining cost is that repeating 2+ words of it verbatim while it speaks
     will not interrupt it - rare, and recoverable by speaking again.
     """
     if not spoken:
         return False
     phrase = _normalise(heard)
-    return bool(phrase) and phrase in _normalise(spoken)
+    if len(phrase.split()) < ECHO_MIN_WORDS:
+        return False
+    # Pad both ends so the phrase can only match on word boundaries.
+    return f" {phrase} " in f" {_normalise(spoken)} "
 
 
 @contextlib.asynccontextmanager
@@ -181,6 +205,11 @@ class _Connection:
         # What the assistant is currently saying, used to recognise its own
         # voice coming back through the microphone.
         self._spoken = ""
+        # When that stops being worth checking against. Until the first audio
+        # frame this is just the grace period; after it, the estimated end of
+        # playback (see _echo_active).
+        self._echo_deadline = float("-inf")
+        self._first_audio_at: Optional[float] = None
 
     async def run(self) -> None:
         if not await self._handshake():
@@ -283,7 +312,7 @@ class _Connection:
 
             if kind == "partial":
                 text = event["text"]
-                if looks_like_echo(text, self._spoken):
+                if looks_like_echo(text, self._spoken if self._echo_active() else ""):
                     logger.debug("Ignoring own voice: %r", text)
                     continue
                 await self._send(protocol.partial(text))
@@ -292,7 +321,7 @@ class _Connection:
 
             elif kind == "final":
                 text = event["text"]
-                if looks_like_echo(text, self._spoken):
+                if looks_like_echo(text, self._spoken if self._echo_active() else ""):
                     logger.debug("Ignoring own voice (final): %r", text)
                     continue
                 await self._send(protocol.final(text))
@@ -336,11 +365,34 @@ class _Connection:
 
     # -- outbound -----------------------------------------------------------
 
+    def _echo_active(self) -> bool:
+        """Could the microphone still be picking up the assistant's voice?
+
+        `_spoken` used to linger until the next turn, so a phrase echoed from a
+        reply finished minutes ago was dropped as the assistant "hearing itself".
+        Once audio starts we know when it began and roughly how long the text
+        takes to say; until then all we know is that a turn just started.
+        """
+        now = _now()
+        if self._first_audio_at is None:
+            return now < self._echo_deadline
+        playback_ends = (
+            self._first_audio_at
+            + len(self._spoken) / ECHO_CHARS_PER_SECOND
+            + ECHO_GRACE_SECONDS
+        )
+        return now < max(self._echo_deadline, playback_ends)
+
     async def _send(self, payload: dict) -> None:
         """Serialised send that tolerates a socket closing underneath us."""
         kind = payload.get("type")
         if kind == "thinking":
             self._spoken = ""
+            self._first_audio_at = None
+            self._echo_deadline = _now() + ECHO_GRACE_SECONDS
+        elif kind == "audio":
+            if self._first_audio_at is None:
+                self._first_audio_at = _now()
         elif kind == "reply_chunk":
             # Held past the end of the turn on purpose: audio is still playing
             # out after the last token, and that tail echoes too.
