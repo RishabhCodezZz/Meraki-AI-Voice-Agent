@@ -55,19 +55,22 @@ def _compute_asset_version() -> str:
     return f"{int(newest):x}"
 
 
-_asset_v_cache: Optional[str] = None
+# How long a computed token is reused. Walking /static on every page view is
+# wasted work, but a token cached for the life of the process goes stale the
+# moment a file is edited without a restart (uvicorn's reloader only watches
+# .py files), and the browser then keeps serving the old CSS and JS.
+ASSET_VERSION_TTL = 2.0
+
+_asset_v_cache: Optional[tuple[float, str]] = None  # (when computed, token)
 
 
 def _asset_version() -> str:
-    """The token, computed once per process rather than walking /static per hit.
-
-    Files only change between deploys, and a deploy restarts the process; under
-    `--reload` the module reloads on any change, so development still sees it.
-    """
+    """The cache-busting token, recomputed at most once per ASSET_VERSION_TTL."""
     global _asset_v_cache
-    if _asset_v_cache is None:
-        _asset_v_cache = _compute_asset_version()
-    return _asset_v_cache
+    now = _now()
+    if _asset_v_cache is None or now - _asset_v_cache[0] >= ASSET_VERSION_TTL:
+        _asset_v_cache = (now, _compute_asset_version())
+    return _asset_v_cache[1]
 
 
 # One connection pool shared by every request; created on startup.
@@ -282,7 +285,8 @@ class _Connection:
             # receive_json() would raise KeyError on a binary frame, outside any
             # handler; take the raw frame and decode it ourselves.
             message = json.loads(frame["text"])
-        except (asyncio.TimeoutError, ValueError, TypeError, KeyError):
+        # RecursionError: a first frame of 40k `[` overflows the JSON parser's stack.
+        except (asyncio.TimeoutError, ValueError, TypeError, KeyError, RecursionError):
             await self._send(
                 protocol.error("handshake", "Expected a config message.", fatal=True)
             )

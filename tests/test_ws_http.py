@@ -91,6 +91,15 @@ def test_a_binary_first_frame_is_a_typed_error(client, caplog):
     assert _no_tracebacks(caplog) == []
 
 
+def test_a_deeply_nested_first_frame_is_a_typed_error(client, caplog):
+    caplog.set_level(logging.DEBUG)
+    with client.websocket_connect("/ws") as ws:
+        ws.send_text("[" * 40000)
+        reply = ws.receive_json()
+        assert (reply["type"], reply["code"], reply["fatal"]) == ("error", "handshake", True)
+    assert _no_tracebacks(caplog) == []
+
+
 def test_text_that_is_not_json_is_a_typed_error(client):
     with client.websocket_connect("/ws") as ws:
         ws.send_text("hello there")
@@ -222,6 +231,9 @@ def test_origin_allowed_unit():
 def test_origin_allowed_honours_the_extra_list():
     extra = {"https://app.example.org"}
     assert origin_allowed("https://app.example.org", "example.com", extra)
+    # Browsers send Origin in lowercase; the configured entry may not be.
+    assert origin_allowed("https://app.example.org", "example.com", {"https://App.Example.org/"})
+    assert origin_allowed("https://App.Example.org", "example.com", extra)
     assert not origin_allowed("https://other.example.org", "example.com", extra)
 
 
@@ -240,18 +252,30 @@ def test_get_routes_still_work(client):
 
 def test_index_does_not_walk_the_static_tree_per_request(client, monkeypatch):
     calls = []
+    tokens = iter(["old", "new"])
+    now = [1000.0]
 
     def counted():
         calls.append(1)
-        return "abc123"
+        return next(tokens)
 
     monkeypatch.setattr(main, "_compute_asset_version", counted)
     monkeypatch.setattr(main, "_asset_v_cache", None)
+    monkeypatch.setattr(main, "_now", lambda: now[0])
 
-    client.get("/")
-    client.get("/")
-
+    # (a) within the TTL the walk happens once, however many requests arrive.
+    first = client.get("/").text
+    now[0] += main.ASSET_VERSION_TTL / 2
+    second = client.get("/").text
     assert len(calls) == 1
+    assert "v=old" in first and "v=old" in second
+
+    # (b) past it, the token is recomputed, so an edited file shows up even
+    # though no process restart happened.
+    now[0] += main.ASSET_VERSION_TTL
+    third = client.get("/").text
+    assert len(calls) == 2
+    assert "v=new" in third
 
 
 # --- keys ---------------------------------------------------------------------

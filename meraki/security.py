@@ -24,7 +24,10 @@ def origin_allowed(origin: str | None, host: str, extra: set[str]) -> bool:
     """
     if origin is None:
         return True
-    if origin in extra:
+    # Compared case-insensitively and without a trailing slash, as config.py
+    # normalises the list: an operator's "https://App.example.org/" must match
+    # the lowercase, slashless Origin a browser sends.
+    if origin.lower().rstrip("/") in {e.lower().rstrip("/") for e in extra}:
         return True
     netloc = urlsplit(origin).netloc.lower()
     # An origin with no host ("null", "") must not match an empty Host header.
