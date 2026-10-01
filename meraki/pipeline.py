@@ -9,6 +9,7 @@ recorded so the conversation stays coherent.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import AsyncGenerator, Awaitable, Callable
 
@@ -55,11 +56,16 @@ class TurnPipeline:
                     yield token
 
             seq = 0
-            async for audio_b64 in tts.stream_speech(
-                self._http, self._keys.murf, tee()
-            ):
-                await self._send(protocol.audio(seq, audio_b64))
-                seq += 1
+            # aclosing: a cancel landing while a frame is being sent leaves the
+            # generator suspended at its yield. Without an explicit close its
+            # producer task keeps pulling tokens and can send a reply_chunk after
+            # `interrupted`; this closes it before the cancellation leaves run().
+            async with contextlib.aclosing(
+                tts.stream_speech(self._http, self._keys.murf, tee())
+            ) as speech:
+                async for audio_b64 in speech:
+                    await self._send(protocol.audio(seq, audio_b64))
+                    seq += 1
 
             done = "".join(reply_parts).strip()
             if done:

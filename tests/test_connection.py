@@ -154,11 +154,30 @@ def test_real_speech_still_interrupts_while_it_is_talking():
 
 
 def test_a_single_word_partial_does_not_trip_barge_in():
-    """One syllable of room noise should not cut the assistant off."""
+    """One syllable of room noise should not cut the assistant off.
+
+    Only meaningful with a turn to cut off: with nothing running, no word count
+    could ever produce an interruption and the test would pass regardless.
+    """
     assert BARGE_IN_MIN_WORDS == 2
-    sent, _ = drive([{"kind": "partial", "text": "um"}, {"kind": "closed"}])
+    started, finished = [], []
+
+    async def a_turn_in_progress():
+        started.append(True)
+        await asyncio.sleep(0.05)
+        finished.append(True)
+
+    sent, _ = drive(
+        [
+            {"kind": "final", "text": "tell me a story"},
+            {"kind": "partial", "text": "um"},
+            {"kind": "closed"},
+        ],
+        turn_factory=a_turn_in_progress,
+    )
 
     assert "interrupted" not in types(sent)
+    assert started == [True] and finished == [True], "the turn was cancelled"
 
 
 # --- echo expires ------------------------------------------------------------

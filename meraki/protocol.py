@@ -20,7 +20,9 @@ Server -> client
     {"type": "reply_done",  "text": str}
     {"type": "audio", "seq": int, "data": <base64 mp3>}
     {"type": "speech_done"}
-    {"type": "interrupted"}           user barged in; drop queued audio
+    {"type": "interrupted"}           user barged in; drop queued audio. Also sent
+                                      for a turn that has already finished while
+                                      its audio is still playing in the browser
     {"type": "error", "code": str, "message": str, "fatal": bool}
 """
 

@@ -179,6 +179,50 @@ def test_cancelling_before_any_token_records_no_empty_reply(monkeypatch):
     assert [t.role for t in convo.turns] == ["user"]
 
 
+def test_cancelling_while_an_audio_frame_is_being_sent_closes_the_speech_stream(
+    monkeypatch,
+):
+    """The generator must be closed before the cancel leaves `run`, not later.
+
+    The real stream_speech has a background producer pulling LLM tokens; left
+    open it keeps pulling, and sends a stray reply_chunk after `interrupted`.
+    Asserted inside the running loop because asyncio.run closes leftover async
+    generators itself on the way out, which would hide the leak.
+    """
+    closed = []
+
+    async def stream_speech(http, key, text_stream, voice_id=None):
+        try:
+            yield "QUJD"
+            await asyncio.Event().wait()
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(tts, "stream_speech", stream_speech)
+
+    async def scenario():
+        reached_audio = asyncio.Event()
+
+        async def send(frame):
+            if frame["type"] == "audio":
+                reached_audio.set()
+                await asyncio.Event().wait()  # the websocket is backed up
+
+        pipeline = TurnPipeline(
+            send=send, http=None, keys=KEYS, conversation=Conversation()
+        )
+        turn = asyncio.create_task(pipeline.run("hello"))
+        await asyncio.wait_for(reached_audio.wait(), timeout=2)
+
+        turn.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+
+        assert closed == [True], "speech stream was still open when the turn ended"
+
+    asyncio.run(scenario())
+
+
 # --- failure modes -----------------------------------------------------------
 
 

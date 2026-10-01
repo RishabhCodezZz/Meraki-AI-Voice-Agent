@@ -210,6 +210,11 @@ class _Connection:
         # playback (see _echo_active).
         self._echo_deadline = float("-inf")
         self._first_audio_at: Optional[float] = None
+        # An audio frame went out and no `interrupted` has since: the browser may
+        # still be playing it even though the turn task finished long before.
+        self._audio_pending = False
+        # `interrupted` goes out once per utterance, however many partials follow.
+        self._interrupt_sent = False
 
     async def run(self) -> None:
         if not await self._handshake():
@@ -325,7 +330,10 @@ class _Connection:
                     logger.debug("Ignoring own voice (final): %r", text)
                     continue
                 await self._send(protocol.final(text))
-                await self._cancel_turn(notify=False)
+                # Notify here too: a one-word "stop" never reaches the partial
+                # threshold, and the old reply may still be playing.
+                await self._cancel_turn(notify=True)
+                self._interrupt_sent = False  # the utterance is over
                 self._turn = asyncio.create_task(self._run_turn(text))
 
             elif kind == "error":
@@ -355,13 +363,23 @@ class _Connection:
 
     async def _cancel_turn(self, *, notify: bool) -> None:
         turn, self._turn = self._turn, None
-        if turn is None or turn.done():
-            return
-        turn.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await turn
-        if notify:
+        was_running = turn is not None and not turn.done()
+        if was_running:
+            turn.cancel()
+            # Not `await turn` under suppress(CancelledError): that would also
+            # swallow a cancel aimed at *us* while the turn unwinds, and a
+            # close() waiting on this would never finish.
+            await asyncio.wait({turn})
+        if turn is not None and not turn.cancelled() and turn.exception():
+            logger.error("Turn failed", exc_info=turn.exception())
+
+        # The turn task ends when synthesis does, seconds before the browser has
+        # played it out, so "nothing running" does not mean "nothing to cut off".
+        # Audio that finished playing long ago is not worth announcing.
+        audible = self._audio_pending and self._echo_active()
+        if notify and (was_running or audible) and not self._interrupt_sent:
             await self._send(protocol.interrupted())
+            self._interrupt_sent = True
 
     # -- outbound -----------------------------------------------------------
 
@@ -391,6 +409,7 @@ class _Connection:
             self._first_audio_at = None
             self._echo_deadline = _now() + ECHO_GRACE_SECONDS
         elif kind == "audio":
+            self._audio_pending = True
             if self._first_audio_at is None:
                 self._first_audio_at = _now()
         elif kind == "reply_chunk":
@@ -403,17 +422,24 @@ class _Connection:
                 await self._ws.send_json(payload)
             except (RuntimeError, WebSocketDisconnect):
                 logger.debug("Send after close: %s", payload.get("type"))
+        if kind == "interrupted":
+            self._audio_pending = False
 
     # -- teardown -----------------------------------------------------------
 
     async def close(self) -> None:
-        await self._cancel_turn(notify=False)
-        if self._pump is not None:
-            self._pump.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._pump
-        if self._speech is not None:
-            await self._speech.close()
-        with contextlib.suppress(RuntimeError):
-            await self._ws.close()
-        logger.info("Session %s closed", self._session_id or "?")
+        try:
+            await self._cancel_turn(notify=False)
+            if self._pump is not None:
+                self._pump.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._pump
+            if self._speech is not None:
+                try:
+                    await self._speech.close()
+                except Exception:  # noqa: BLE001 - teardown must reach ws.close()
+                    logger.exception("Closing the transcription stream failed")
+        finally:
+            with contextlib.suppress(RuntimeError):
+                await self._ws.close()
+            logger.info("Session %s closed", self._session_id or "?")
