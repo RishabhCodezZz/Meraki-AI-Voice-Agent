@@ -12,7 +12,11 @@ import {
   describeStartError,
   withTimeout,
   makeSessionId,
+  isValidSessionId,
   pickKeys,
+  networkError,
+  shouldRetryConnect,
+  retryOnce,
 } from '../../static/js/support.js';
 
 /** An environment that has everything; tests knock items out of it. */
@@ -207,4 +211,128 @@ test('pickKeys tolerates stored junk', () => {
   for (const junk of [null, undefined, 'text', 42, []]) {
     assert.deepEqual(pickKeys(junk, ['deepgram']), {});
   }
+});
+
+// --- isValidSessionId --------------------------------------------------------
+
+test('a session id is valid exactly when the server would keep it', () => {
+  for (const id of ['abcd1234', 'A_b-C_d-', 'x'.repeat(64), makeSessionId()]) {
+    assert.equal(isValidSessionId(id), true, id);
+  }
+  const bad = [
+    '', 'short', 'x'.repeat(7), 'x'.repeat(65),
+    'has space1', 'dots.in.it1', 'slash/slash1', 'abcd1234\n', '../../etc/passwd',
+    null, undefined, 12345678, {}, ['abcd1234'],
+  ];
+  for (const id of bad) assert.equal(isValidSessionId(id), false, String(id));
+});
+
+// --- shouldRetryConnect ------------------------------------------------------
+
+test('only network-level failures are worth retrying', () => {
+  assert.equal(shouldRetryConnect(networkError('Could not reach the server.')), true);
+  assert.equal(shouldRetryConnect(networkError('The server closed the connection.')), true);
+});
+
+test('a server error frame, a support failure or anything unknown is not retried', () => {
+  // The same wording as a network failure must not be enough: a server frame
+  // that happens to read "Could not reach the server." is still the server's.
+  assert.equal(shouldRetryConnect(new Error('Could not reach the server.')), false);
+  assert.equal(shouldRetryConnect(new Error('Deepgram rejected that key.')), false);
+  assert.equal(shouldRetryConnect(Object.assign(new Error('x'), { name: 'NotAllowedError' })), false);
+  assert.equal(shouldRetryConnect(undefined), false);
+  assert.equal(shouldRetryConnect(null), false);
+  assert.equal(shouldRetryConnect('Could not reach the server.'), false);
+});
+
+test('withTimeout can reject with an error the caller built', async (t) => {
+  trackTimers(t);
+  const never = new Promise(() => {});
+  const error = await withTimeout(never, 20, 'too slow', networkError).catch((e) => e);
+  assert.equal(error.message, 'too slow');
+  assert.equal(shouldRetryConnect(error), true, 'a timeout is a network failure');
+});
+
+// --- retryOnce ---------------------------------------------------------------
+
+/** A `run` that fails with the given errors in order, then succeeds. */
+function flaky(...errors) {
+  const calls = { n: 0 };
+  const run = async () => {
+    calls.n += 1;
+    if (errors.length) throw errors.shift();
+    return 'connected';
+  };
+  return { run, calls };
+}
+
+test('retryOnce returns the first result without waiting when nothing fails', async () => {
+  const { run, calls } = flaky();
+  const waits = [];
+  const result = await retryOnce(run, {
+    shouldRetry: () => true, delayMs: 2000, wait: (ms) => waits.push(ms),
+  });
+  assert.equal(result, 'connected');
+  assert.equal(calls.n, 1);
+  assert.deepEqual(waits, []);
+});
+
+test('retryOnce waits the delay and tries once more after a retryable failure', async () => {
+  const { run, calls } = flaky(networkError('down'));
+  const waits = [];
+  const retried = [];
+  const result = await retryOnce(run, {
+    shouldRetry: shouldRetryConnect,
+    delayMs: 2000,
+    wait: async (ms) => { waits.push(ms); },
+    onRetry: (error) => retried.push(error.message),
+  });
+  assert.equal(result, 'connected');
+  assert.equal(calls.n, 2);
+  assert.deepEqual(waits, [2000]);
+  assert.deepEqual(retried, ['down']);
+});
+
+test('retryOnce gives up after one retry and surfaces the second failure', async () => {
+  const { run, calls } = flaky(networkError('first'), networkError('second'));
+  await assert.rejects(
+    retryOnce(run, { shouldRetry: shouldRetryConnect, delayMs: 0, wait: async () => {} }),
+    { message: 'second' }
+  );
+  assert.equal(calls.n, 2, 'never a third attempt');
+});
+
+test('retryOnce does not retry a failure the policy rejects', async () => {
+  const { run, calls } = flaky(new Error('bad key'));
+  await assert.rejects(
+    retryOnce(run, { shouldRetry: shouldRetryConnect, delayMs: 0, wait: async () => {} }),
+    { message: 'bad key' }
+  );
+  assert.equal(calls.n, 1);
+});
+
+test('retryOnce does not retry, or keep waiting, once the caller has cancelled', async () => {
+  // Cancelled before the failure is even looked at.
+  const first = flaky(networkError('down'));
+  await assert.rejects(
+    retryOnce(first.run, {
+      shouldRetry: shouldRetryConnect, delayMs: 0, wait: async () => {}, cancelled: () => true,
+    }),
+    { message: 'down' }
+  );
+  assert.equal(first.calls.n, 1);
+
+  // Cancelled while the delay was running: the retry must not start.
+  let cancelled = false;
+  const second = flaky(networkError('down'));
+  await assert.rejects(
+    retryOnce(second.run, {
+      shouldRetry: shouldRetryConnect,
+      delayMs: 2000,
+      wait: async () => { cancelled = true; },
+      cancelled: () => cancelled,
+    }),
+    { message: 'down' }
+  );
+  assert.equal(second.calls.n, 1, 'a stop pressed during the delay ends the start');
 });

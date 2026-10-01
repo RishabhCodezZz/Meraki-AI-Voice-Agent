@@ -4,17 +4,30 @@ import { PlaybackGate } from './playback-gate.js';
 import {
   describeStartError,
   detectSupport,
+  isValidSessionId,
   makeSessionId,
+  networkError,
   pickKeys,
+  retryOnce,
+  shouldRetryConnect,
   withTimeout,
 } from './support.js';
 import { Visualizer } from './visualizer.js';
 
 const KEY_FIELDS = ['deepgram', 'ollama', 'murf'];
+const SERVICE_NAMES = { deepgram: 'Deepgram', ollama: 'Ollama', murf: 'Murf' };
 const STORAGE_KEYS = 'meraki.keys';
 // The server tells us whether it has keys of its own. If it does, visitors can
 // just talk; if not, they must bring their own.
 const KEYS_REQUIRED = document.body.dataset.keysRequired !== 'false';
+
+// A connect that is still waiting after this long is almost certainly a sleeping
+// free-tier server booting, so say so instead of sitting on "Connecting".
+const COLD_START_MS = 5000;
+// A network failure is retried once after this pause; the server is usually up
+// by then if it was only waking.
+const RETRY_DELAY_MS = 2000;
+const CONNECT_TIMEOUT_MS = 20000;
 
 const el = (id) => document.getElementById(id);
 
@@ -25,6 +38,10 @@ const ui = {
   micBtn: el('mic-btn'),
   micLabel: el('mic-label'),
   hint: el('hint'),
+  stopSpeaking: el('stop-speaking'),
+  banner: el('banner'),
+  bannerText: el('banner-text'),
+  bannerRetry: el('banner-retry'),
   live: el('live'),
   liveUser: el('live-user'),
   liveReply: el('live-reply'),
@@ -36,8 +53,11 @@ const ui = {
   settingsBtn: el('settings-btn'),
   closeSettings: el('close-settings'),
   forgetKeys: el('forget-keys'),
+  toggleKeys: el('toggle-keys'),
   toasts: el('toasts'),
 };
+// The status chip: a button only while it says "Needs keys".
+ui.chip = ui.statusDot.parentElement;
 
 const visualizer = new Visualizer(ui.meter);
 visualizer.start();
@@ -55,13 +75,20 @@ let generation = 0;
 // Set at boot. When the browser cannot do the job nothing should start, and the
 // chip must not claim "Ready" on its way back to rest.
 let supported = true;
+let supportReason = '';
+// Set by "Stop speaking". The server's turn carries on after the button is
+// pressed, so the rest of its audio and caption would arrive and play right
+// back; this drops them until the next turn starts.
+let muteReply = false;
 
 // --- session -----------------------------------------------------------------
 
 function sessionId() {
   const url = new URL(window.location.href);
   let id = url.searchParams.get('s');
-  if (!id) {
+  // Not just "missing": the server mints its own id for one it will not keep, and
+  // a link with such an id would then load history that never resumes.
+  if (!isValidSessionId(id)) {
     id = makeSessionId();
     url.searchParams.set('s', id);
     history.replaceState({}, '', url);
@@ -105,26 +132,62 @@ function missingKeys() {
 // --- chrome ------------------------------------------------------------------
 
 let uiState = 'idle';
+let chipOpensKeys = false;
 
-function setState(state, label) {
+const START_HINT = 'Click to start a conversation. Space also works.';
+const HINTS = {
+  idle: START_HINT,
+  blocked: START_HINT,
+  connecting: 'Setting things up…',
+  listening: 'Just talk. Interrupt any time.',
+  thinking: 'Just talk. Interrupt any time.',
+  speaking: 'Talk over it to interrupt.',
+};
+
+function setState(state, label, { opensKeys = false } = {}) {
   uiState = state;
   visualizer.setState(state);
   ui.status.textContent = label;
   ui.statusDot.dataset.state = state;
-  ui.statusDot.parentElement.dataset.state = state;
+  ui.chip.dataset.state = state;
   document.body.dataset.state = state;
+  ui.hint.textContent = HINTS[state] || ui.hint.textContent;
+
+  // The stop button disappears with the state; a keyboard user who pressed it
+  // would otherwise land on <body>, where Space ends the whole session.
+  const leaving = state !== 'speaking' && document.activeElement === ui.stopSpeaking;
+  ui.stopSpeaking.hidden = state !== 'speaking';
+  if (leaving) ui.micBtn.focus();
+
+  // "Needs keys" is something to act on, so it is reachable and operable; every
+  // other label is just a status and must not be announced as a control.
+  chipOpensKeys = opensKeys;
+  if (opensKeys) {
+    ui.chip.tabIndex = 0;
+    ui.chip.setAttribute('role', 'button');
+  } else {
+    ui.chip.removeAttribute('tabindex');
+    ui.chip.removeAttribute('role');
+  }
 }
 
 /** What the chip should read when no conversation is running. */
 function restIdle() {
-  if (!supported) setState('blocked', 'Unsupported');
-  else if (missingKeys().length) setState('blocked', 'Needs keys');
-  else setState('idle', 'Ready');
+  if (!supported) {
+    setState('blocked', 'Unsupported');
+    ui.hint.textContent = supportReason;
+  } else if (missingKeys().length) {
+    setState('blocked', 'Needs keys', { opensKeys: true });
+  } else {
+    setState('idle', 'Ready');
+  }
 }
 
 function toast(message, kind = 'info') {
   const node = document.createElement('div');
   node.className = `toast toast--${kind}`;
+  // The container is polite, which suits a confirmation; a failure should cut in.
+  node.setAttribute('role', kind === 'error' ? 'alert' : 'status');
   node.textContent = message;
   ui.toasts.appendChild(node);
   requestAnimationFrame(() => node.classList.add('is-in'));
@@ -132,6 +195,28 @@ function toast(message, kind = 'info') {
     node.classList.remove('is-in');
     setTimeout(() => node.remove(), 250);
   }, 4200);
+}
+
+// --- banner ------------------------------------------------------------------
+// A failure that outlives its toast. One button serves two jobs, so what it does
+// is remembered here: 'retry' starts again, 'keys' opens the key dialog.
+
+let bannerAction = null;
+
+function showBanner(message, { retry = false, openKeys = false } = {}) {
+  ui.bannerText.textContent = message;
+  bannerAction = retry ? 'retry' : openKeys ? 'keys' : null;
+  ui.bannerRetry.hidden = bannerAction === null;
+  ui.bannerRetry.textContent = retry ? 'Retry' : 'Open Keys';
+  ui.banner.hidden = false;
+}
+
+function hideBanner() {
+  // Pressed Retry: the button is about to vanish, so keep focus on something real.
+  if (ui.banner.contains(document.activeElement)) ui.micBtn.focus();
+  ui.banner.hidden = true;
+  ui.bannerText.textContent = '';
+  bannerAction = null;
 }
 
 function addTurn(role, content) {
@@ -167,16 +252,32 @@ function clearLive() {
 
 // --- history -----------------------------------------------------------------
 
+const EMPTY_TEXT = ui.empty.textContent;
+let historyLoad = 0;
+
 async function loadHistory() {
+  // Without this, "Nothing yet" sits there as if it were the answer while the
+  // request is still out.
+  const mine = ++historyLoad;
+  ui.empty.textContent = 'Loading conversation…';
   try {
     const response = await fetch(`/api/history/${encodeURIComponent(sessionId())}`);
     if (!response.ok) return;
     const { history } = await response.json();
-    ui.transcript.replaceChildren();
+    const log = ui.transcript;
+    // Rebuilding the list sends it to the bottom (every addTurn pins an empty
+    // log); someone who had scrolled up to read should stay where they were.
+    const scrolledUp = log.scrollHeight - log.scrollTop - log.clientHeight >= 60;
+    const top = log.scrollTop;
+    log.replaceChildren();
     history.forEach((turn) => addTurn(turn.role, turn.content));
     ui.empty.hidden = history.length > 0;
+    if (scrolledUp) log.scrollTop = top;
   } catch {
     /* history is a nicety; never block startup on it */
+  } finally {
+    // A newer load owns the text now; only the last one standing restores it.
+    if (mine === historyLoad) ui.empty.textContent = EMPTY_TEXT;
   }
 }
 
@@ -238,11 +339,11 @@ function connect(attempt) {
       settled = true;
       resolve(ws);
     };
-    const failed = (message) => {
+    const failed = (error) => {
       if (settled) return;
       settled = true;
       closeQuietly(ws);
-      reject(new Error(message || 'Could not reach the server.'));
+      reject(error);
     };
 
     ws.onopen = () => {
@@ -272,15 +373,16 @@ function connect(attempt) {
       }
       if (message.type === 'error' && !settled) {
         // Surfaced by startRecording's catch; don't double-toast it here.
-        failed(message.message);
+        // Not a network failure, so not retried: it will say the same again.
+        failed(new Error(message.message));
         return;
       }
       handleMessage(message);
     };
 
-    ws.onerror = () => failed();
+    ws.onerror = () => failed(networkError('Could not reach the server.'));
     ws.onclose = () => {
-      failed('The server closed the connection.');
+      failed(networkError('The server closed the connection.'));
       // Not the live socket: stop() or a newer start already moved on, and
       // clearing `socket` here would knock out the session that replaced it.
       if (ws !== socket) return;
@@ -290,6 +392,7 @@ function connect(attempt) {
       if (recording) {
         stopRecording({ silent: true });
         toast('Connection lost.', 'error');
+        showBanner('Connection lost.', { retry: true });
       }
     };
   });
@@ -327,10 +430,12 @@ function handleMessage(message) {
     case 'thinking':
       player.flush();
       gate.turnStarted();
+      muteReply = false;
       setState('thinking', 'Thinking');
       break;
 
     case 'reply_chunk':
+      if (muteReply) break;
       replyBuffer += message.text;
       showLive({ reply: replyBuffer });
       break;
@@ -342,6 +447,7 @@ function handleMessage(message) {
       break;
 
     case 'audio':
+      if (muteReply) break;
       setState('speaking', 'Speaking');
       player.enqueue(message.data).catch(() => {
         toast('Could not play that audio chunk.', 'error');
@@ -368,6 +474,7 @@ function handleMessage(message) {
     case 'error':
       toast(message.message, 'error');
       if (message.fatal) {
+        showBanner(message.message, { retry: true });
         gate.cancel();
         stopRecording({ silent: true });
       } else if (gate.turnOpen) {
@@ -387,8 +494,11 @@ function handleMessage(message) {
 
 async function startRecording() {
   if (!supported) return;
+  hideBanner();
   if (missingKeys().length) {
-    toast('Add your API keys to get started.', 'error');
+    // The dialog opens over this; the banner is what is left when it is closed
+    // without saving, and "Open Keys" brings it back.
+    showBanner('Add your API keys to get started.', { openKeys: true });
     openSettings();
     return;
   }
@@ -397,9 +507,18 @@ async function startRecording() {
   const cancelled = () => mine !== generation;
   const attempt = { ws: null };
   let capture = null;
+  muteReply = false;
 
   setState('connecting', 'Connecting');
   ui.micBtn.disabled = true;
+
+  // Armed for the connect only. The microphone prompt that follows can take as
+  // long as the visitor likes, and that is not the server waking up.
+  const slowTimer = setTimeout(() => {
+    if (cancelled() || uiState !== 'connecting') return;
+    setState('connecting', 'Waking the server…');
+    ui.hint.textContent = 'A sleeping free server can take up to a minute.';
+  }, COLD_START_MS);
 
   try {
     player = player || new SpeechPlayer({
@@ -433,12 +552,23 @@ async function startRecording() {
     await Promise.all([player.ensureContext(), capture.prepare()]);
     if (cancelled()) return;
 
-    const ws = await withTimeout(
-      connect(attempt),
-      20000,
-      'The server took too long to answer.'
+    const ws = await retryOnce(
+      () => {
+        // The first try's socket may still be open (a timeout does not close it).
+        if (attempt.ws) closeQuietly(attempt.ws);
+        return withTimeout(
+          connect(attempt),
+          CONNECT_TIMEOUT_MS,
+          'The server took too long to answer.',
+          networkError
+        );
+      },
+      { shouldRetry: shouldRetryConnect, delayMs: RETRY_DELAY_MS, cancelled }
     );
+    clearTimeout(slowTimer);
     if (cancelled()) return;
+    // Connected. If the slow notice went up, take it down for the mic prompt.
+    setState('connecting', 'Connecting');
     socket = ws;
 
     await capture.start();
@@ -451,14 +581,16 @@ async function startRecording() {
     recording = true;
     ui.micBtn.dataset.active = 'true';
     ui.micLabel.textContent = 'Stop';
-    ui.hint.textContent = 'Just talk. Interrupt any time.';
     setState('listening', 'Listening');
   } catch (error) {
     if (!cancelled()) {
-      toast(describeStartError(error), 'error');
+      const message = describeStartError(error);
+      toast(message, 'error');
+      showBanner(message, { retry: true });
       await stopRecording({ silent: true });
     }
   } finally {
+    clearTimeout(slowTimer);
     // A pending socket that never became `socket` (timeout, early close, a
     // cancelled start) is ours to close; the live one is stopRecording's. The
     // same goes for a mic that a stop never got to see.
@@ -477,7 +609,6 @@ async function stopRecording({ silent = false } = {}) {
   ui.micBtn.dataset.active = 'false';
   ui.micBtn.disabled = !supported;
   ui.micLabel.textContent = 'Start talking';
-  ui.hint.textContent = 'Click to start a conversation';
 
   // Take ownership and clear the module state before awaiting anything: a
   // start pressed while mic.stop() is still closing the context must find a
@@ -494,6 +625,7 @@ async function stopRecording({ silent = false } = {}) {
   if (gate) gate.cancel();
   if (player) player.flush();
   replyBuffer = '';
+  muteReply = false;
   clearLive();
   restIdle();
   if (!silent) loadHistory();
@@ -505,34 +637,104 @@ function toggleRecording() {
   else startRecording();
 }
 
+/**
+ * Cut Meraki off by hand. Nothing is sent: the server has no such message, and
+ * the next thing the visitor says replaces its turn anyway. What it keeps
+ * sending in the meantime is dropped (muteReply) rather than played.
+ */
+function stopSpeaking() {
+  if (uiState !== 'speaking') return;
+  muteReply = true;
+  player.flush();
+  gate.cancel();
+  replyBuffer = '';
+  showLive({ reply: '' });
+  if (recording) setState('listening', 'Listening');
+  else restIdle();
+}
+
 // --- settings ----------------------------------------------------------------
 
+const keyInput = (name) => el(`key-${name}`);
+
+function showKeyError(name, message) {
+  const error = el(`key-error-${name}`);
+  error.textContent = message;
+  error.hidden = false;
+  keyInput(name).setAttribute('aria-invalid', 'true');
+}
+
+function clearKeyError(name) {
+  const error = el(`key-error-${name}`);
+  error.textContent = '';
+  error.hidden = true;
+  keyInput(name).removeAttribute('aria-invalid');
+}
+
+/** The three-step row: a tick for every field that has something in it. */
+function updateChecklist() {
+  KEY_FIELDS.forEach((name) => {
+    const done = keyInput(name).value.trim() !== '';
+    const step = el(`key-step-${name}`);
+    step.dataset.done = String(done);
+    step.querySelector('.steps__mark').textContent = done ? '\u2713' : '\u2022';
+    // The mark is decoration to a screen reader; this is what it hears instead.
+    step.querySelector('.sr-only').textContent = done ? ' added' : ' not added';
+  });
+}
+
+function setKeysVisible(visible) {
+  KEY_FIELDS.forEach((name) => {
+    keyInput(name).type = visible ? 'text' : 'password';
+  });
+  ui.toggleKeys.textContent = visible ? 'Hide' : 'Show';
+  // The visible word alone is ambiguous out of context, and the label changes
+  // with the state, so this is not also a pressed/unpressed toggle.
+  ui.toggleKeys.setAttribute('aria-label', visible ? 'Hide keys' : 'Show keys');
+}
+
 function openSettings() {
+  if (ui.settings.open) return;
   const keys = loadKeys();
   KEY_FIELDS.forEach((name) => {
-    const field = el(`key-${name}`);
-    if (field) field.value = keys[name] || '';
+    keyInput(name).value = keys[name] || '';
+    clearKeyError(name);
   });
+  setKeysVisible(false);
+  updateChecklist();
+  // A modal dialog sits above everything else on the page, toasts included.
+  // While it is open they live inside it, or "Keys removed" would play out
+  // behind the backdrop where nobody can see it.
+  ui.settings.append(ui.toasts);
   ui.settings.showModal();
+  // showModal() focuses the first control it finds (Close); the visitor wants
+  // the first key they still have to paste.
+  const target = KEY_FIELDS.map(keyInput).find((input) => !input.value) || keyInput(KEY_FIELDS[0]);
+  target.focus();
 }
 
 function submitSettings(event) {
   event.preventDefault();
   const keys = {};
   KEY_FIELDS.forEach((name) => {
-    const value = el(`key-${name}`).value.trim();
+    const value = keyInput(name).value.trim();
     if (value) keys[name] = value;
+    clearKeyError(name);
   });
 
   const missing = KEY_FIELDS.filter((name) => !keys[name]);
   if (KEYS_REQUIRED && missing.length) {
-    toast('Deepgram, Ollama and Murf keys are all required here.', 'error');
+    // Inline, under the field: a toast would render behind the dialog.
+    missing.forEach((name) => showKeyError(name, `Paste your ${SERVICE_NAMES[name]} key.`));
+    keyInput(missing[0]).focus();
     return;
   }
 
   if (!saveKeys(keys)) return;
   ui.settings.close();
   if (!recording) restIdle();
+  // The keys it was asking for are in; the banner would be stale.
+  if (bannerAction === 'keys' && !missingKeys().length) hideBanner();
   toast(
     Object.keys(keys).length
       ? 'Saved on this device.'
@@ -543,9 +745,10 @@ function submitSettings(event) {
 
 function forgetKeys() {
   KEY_FIELDS.forEach((name) => {
-    const field = el(`key-${name}`);
-    if (field) field.value = '';
+    keyInput(name).value = '';
+    clearKeyError(name);
   });
+  updateChecklist();
   saveKeys({});
   if (!recording) restIdle();
   toast('Keys removed from this browser.');
@@ -559,6 +762,53 @@ ui.settingsBtn.addEventListener('click', openSettings);
 ui.closeSettings.addEventListener('click', () => ui.settings.close());
 ui.settingsForm.addEventListener('submit', submitSettings);
 ui.forgetKeys.addEventListener('click', forgetKeys);
+ui.toggleKeys.addEventListener('click', () => {
+  setKeysVisible(keyInput(KEY_FIELDS[0]).type === 'password');
+});
+ui.stopSpeaking.addEventListener('click', stopSpeaking);
+ui.bannerRetry.addEventListener('click', () => {
+  if (bannerAction === 'keys') {
+    openSettings();
+  } else if (bannerAction === 'retry' && !recording) {
+    startRecording(); // hides the banner itself
+  }
+});
+
+KEY_FIELDS.forEach((name) => {
+  keyInput(name).addEventListener('input', () => {
+    updateChecklist();
+    clearKeyError(name);
+  });
+});
+
+// A click on the backdrop lands on the dialog element itself (the form fills
+// the rest). It only counts if the press started there too: dragging to select
+// a key and letting go outside the box also ends in a click on the dialog.
+let pressedBackdrop = false;
+ui.settings.addEventListener('pointerdown', (event) => {
+  pressedBackdrop = event.target === ui.settings;
+});
+ui.settings.addEventListener('click', (event) => {
+  if (event.target === ui.settings && pressedBackdrop) ui.settings.close();
+  pressedBackdrop = false;
+});
+ui.settings.addEventListener('close', () => {
+  // `close` is dispatched a task later; if the dialog has been opened again by
+  // then, the toasts belong inside it.
+  if (ui.settings.open) return;
+  document.body.append(ui.toasts);
+  // Do not leave pasted keys readable behind a dialog that looks closed.
+  setKeysVisible(false);
+});
+
+ui.chip.addEventListener('click', () => {
+  if (chipOpensKeys) openSettings();
+});
+ui.chip.addEventListener('keydown', (event) => {
+  if (!chipOpensKeys || (event.key !== 'Enter' && event.key !== ' ')) return;
+  event.preventDefault();
+  openSettings();
+});
 
 document.addEventListener('keydown', (event) => {
   if (event.code !== 'Space' || event.target !== document.body) return;
@@ -579,8 +829,8 @@ window.addEventListener('beforeunload', () => {
 const support = detectSupport();
 if (!support.ok) {
   supported = false;
+  supportReason = support.reason;
   ui.micBtn.disabled = true;
-  ui.hint.textContent = support.reason;
 }
 
 sessionId();

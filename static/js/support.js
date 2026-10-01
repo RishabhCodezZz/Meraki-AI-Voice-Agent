@@ -47,14 +47,65 @@ export function describeStartError(error) {
   }
 }
 
-/** Reject with `message` if `promise` has not settled within `ms`. */
-export function withTimeout(promise, ms, message) {
+/**
+ * Reject with `message` if `promise` has not settled within `ms`. `makeError`
+ * builds the rejection, for callers that need to tell a timeout apart.
+ */
+export function withTimeout(promise, ms, message, makeError = (text) => new Error(text)) {
   let timer;
   const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(message)), ms);
+    timer = setTimeout(() => reject(makeError(message)), ms);
   });
   // Clear on every outcome, or a settled call leaves a timer armed for later.
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * A failure of the transport itself: nothing answered, or the line dropped
+ * before the server said ready. Marked rather than recognised by its wording,
+ * so a server `error` frame can never be mistaken for one.
+ */
+export function networkError(message) {
+  const error = new Error(message);
+  error.network = true;
+  return error;
+}
+
+/**
+ * Should a failed connect be tried again? Only a network failure should: a
+ * sleeping free server answers the second knock, but a rejected key or a bad
+ * handshake gets the same answer every time, and a missing microphone is not a
+ * connection problem at all.
+ */
+export function shouldRetryConnect(error) {
+  return error instanceof Error && error.network === true;
+}
+
+/**
+ * Run `run`; if it fails and `shouldRetry` says so, wait `delayMs` and run it
+ * one more time. `cancelled` is checked after the failure and again after the
+ * wait, because a stop pressed during the delay must end the start, not begin
+ * another connection. The original failure is what a cancelled call rejects with.
+ */
+export async function retryOnce(
+  run,
+  {
+    shouldRetry,
+    delayMs,
+    cancelled = () => false,
+    onRetry = () => {},
+    wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  }
+) {
+  try {
+    return await run();
+  } catch (error) {
+    if (cancelled() || !shouldRetry(error)) throw error;
+    await wait(delayMs);
+    if (cancelled()) throw error;
+    onRetry(error);
+    return run();
+  }
 }
 
 const ID_ALPHABET =
@@ -81,6 +132,17 @@ export function makeSessionId(env = globalThis) {
   let id = Date.now().toString(36);
   while (id.length < 24) id += ID_ALPHABET[Math.floor(Math.random() * 64)];
   return id.slice(0, 32);
+}
+
+const SESSION_ID_SHAPE = /^[A-Za-z0-9_-]{8,64}$/;
+
+/**
+ * Would the server keep this id? Mirrors its pattern. A link with anything else
+ * in `?s=` (hand-edited, or from an older build) would otherwise load history
+ * under one id while the server quietly talks under another.
+ */
+export function isValidSessionId(id) {
+  return typeof id === 'string' && SESSION_ID_SHAPE.test(id);
 }
 
 /**

@@ -69,7 +69,17 @@
         </svg>
         <span id="mic-label">Start talking</span>
       </button>
-      <p id="hint" class="hint">Click to start a conversation</p>
+      <div class="controls__aux">
+        <p id="hint" class="hint">Click to start a conversation. Space also works.</p>
+        <button id="stop-speaking" class="ghost" type="button" hidden>Stop speaking</button>
+      </div>
+    </div>
+
+    <!-- Inside the stage, not a sixth child of <body>: the page is a five-row
+         grid and a sixth visible child would push the log out of its 1fr row. -->
+    <div id="banner" class="banner" role="alert" hidden>
+      <span id="banner-text" class="banner__text"></span>
+      <button id="banner-retry" class="ghost" type="button">Retry</button>
     </div>
   </main>
 
@@ -100,21 +110,33 @@
         can see or spend them.
       </p>
 
+      <div class="steps">
+        <ol class="steps__list" aria-label="Keys added">
+          <li id="key-step-deepgram" class="steps__item" data-done="false"><span class="steps__mark" aria-hidden="true">&bull;</span>Deepgram<span class="sr-only"></span></li>
+          <li id="key-step-ollama" class="steps__item" data-done="false"><span class="steps__mark" aria-hidden="true">&bull;</span>Ollama<span class="sr-only"></span></li>
+          <li id="key-step-murf" class="steps__item" data-done="false"><span class="steps__mark" aria-hidden="true">&bull;</span>Murf<span class="sr-only"></span></li>
+        </ol>
+        <button id="toggle-keys" class="ghost" type="button">Show</button>
+      </div>
+
       <div class="field">
         <label class="field__label" for="key-deepgram">Deepgram <em>speech to text</em></label>
-        <input id="key-deepgram" type="password" autocomplete="new-password" spellcheck="false" placeholder="Paste your key" />
+        <input id="key-deepgram" type="password" aria-describedby="key-error-deepgram" autocomplete="new-password" spellcheck="false" placeholder="Paste your key" />
+        <p class="field__error" id="key-error-deepgram" role="alert" hidden></p>
         <a class="field__get" href="https://console.deepgram.com/signup" target="_blank" rel="noopener noreferrer">Get a Deepgram key</a>
       </div>
 
       <div class="field">
         <label class="field__label" for="key-ollama">Ollama <em>language model</em></label>
-        <input id="key-ollama" type="password" autocomplete="new-password" spellcheck="false" placeholder="Paste your key" />
+        <input id="key-ollama" type="password" aria-describedby="key-error-ollama" autocomplete="new-password" spellcheck="false" placeholder="Paste your key" />
+        <p class="field__error" id="key-error-ollama" role="alert" hidden></p>
         <a class="field__get" href="https://ollama.com/settings/keys" target="_blank" rel="noopener noreferrer">Get an Ollama key</a>
       </div>
 
       <div class="field">
         <label class="field__label" for="key-murf">Murf <em>text to speech</em></label>
-        <input id="key-murf" type="password" autocomplete="new-password" spellcheck="false" placeholder="ap2_..." />
+        <input id="key-murf" type="password" aria-describedby="key-error-murf" autocomplete="new-password" spellcheck="false" placeholder="ap2_..." />
+        <p class="field__error" id="key-error-murf" role="alert" hidden></p>
         <a class="field__get" href="https://murf.ai/api/docs/introduction/overview" target="_blank" rel="noopener noreferrer">Get a Murf key</a>
       </div>
 
