@@ -7,6 +7,7 @@ with a TTL so a long-running process cannot grow without bound.
 
 from __future__ import annotations
 
+import re
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -14,6 +15,16 @@ from threading import Lock
 from typing import Optional
 
 from .config import MAX_HISTORY_MESSAGES, MAX_SESSIONS, SESSION_TTL_SECONDS
+
+
+# Wide enough for a UUID (with or without dashes), narrow enough that an id is
+# safe to log and to use as a dictionary key. The browser's id is untrusted.
+SESSION_ID_RE = re.compile(r"[A-Za-z0-9_-]{8,64}")
+
+
+def valid_session_id(session_id: object) -> bool:
+    # fullmatch, not `$`: `$` also matches before a trailing newline.
+    return isinstance(session_id, str) and SESSION_ID_RE.fullmatch(session_id) is not None
 
 
 @dataclass

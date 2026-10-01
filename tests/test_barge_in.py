@@ -98,6 +98,10 @@ async def finishes_at_once(conn, text):
     return
 
 
+async def thinks_only(conn, text):
+    await conn._send(protocol.thinking())
+
+
 @pytest.fixture
 def clock(monkeypatch):
     """A frozen, adjustable `meraki.main._now`."""
@@ -206,6 +210,30 @@ def test_a_reply_with_no_audio_leaves_nothing_to_interrupt(clock):
 
     s = run(finishes_at_once, script)
 
+    assert "interrupted" not in s.types()
+
+
+def test_a_new_turn_without_audio_forgets_the_previous_turns_audio(clock):
+    """Audio from turn one must not make a silent turn two look interruptible.
+
+    Turn one's audio played out long ago (so the next final announces nothing
+    and the flag survives), then turn two starts and opens a fresh grace window.
+    """
+    turns = [speaks_then_finishes, thinks_only]
+
+    async def behaviour(conn, text):
+        await turns.pop(0)(conn, text)
+
+    async def script(s):
+        await s.feed({"kind": "final", "text": FIRST})
+        clock[0] = 100.0  # turn one's audio is long done
+        await s.feed({"kind": "final", "text": "and another thing"})
+        # Inside turn two's grace window, where a stale flag would count.
+        await s.feed({"kind": "partial", "text": "no wait"})
+
+    s = run(behaviour, script)
+
+    assert "audio" in s.types()
     assert "interrupted" not in s.types()
 
 

@@ -8,6 +8,15 @@ Client -> server
     "stop"                            plain text, not JSON: user released the mic
     <binary>                          PCM16 mono @16kHz
 
+The handshake is validated, and every failure is a typed fatal ``error`` frame
+followed by a close - never a traceback: a first frame that is binary, not JSON,
+not an object, not ``config``, or late (15s) is code ``handshake``; no usable
+keys is code ``keys``. ``keys`` that is not an object counts as no keys.
+``session_id`` is kept only if it matches ``[A-Za-z0-9_-]{8,64}`` (so a reload
+resumes the conversation); anything else, or nothing, gets a fresh server-side
+id. There is no shared fallback id. The upgrade itself is refused (close 1008)
+when the browser's Origin is not this host or in ``MERAKI_ALLOWED_ORIGINS``.
+
 Model and voice are server-side settings; anything a client sends for them is
 ignored. Any key it omits falls back to the server's environment.
 

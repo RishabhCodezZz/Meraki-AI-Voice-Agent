@@ -16,9 +16,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install
-        run: |
-          pip install -r requirements.txt
-          pip install pytest
+        run: pip install -r requirements-dev.txt
       - name: Test
         # No credentials are set, which is deliberate: the suite must pass
         # without them or it is testing the network rather than the code.

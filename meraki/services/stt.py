@@ -85,6 +85,9 @@ class SpeechStream:
                 headers={"Authorization": f"Token {self._api_key}"},
                 heartbeat=None,  # we send Deepgram's own KeepAlive instead
                 max_msg_size=0,
+                # aiohttp's default 10s close wait would let a dead peer stall
+                # teardown (and the visitor's reconnect) for that long.
+                timeout=aiohttp.ClientWSTimeout(ws_close=5),
             )
         except aiohttp.WSServerHandshakeError as exc:
             if exc.status in (401, 403):

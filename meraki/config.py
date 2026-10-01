@@ -64,6 +64,17 @@ MAX_HISTORY_MESSAGES = 40
 MAX_SESSIONS = 500  # LRU cap so the in-memory store cannot grow without bound
 SESSION_TTL_SECONDS = 60 * 60 * 2
 
+# --- Network -----------------------------------------------------------------
+
+# Extra origins allowed to open the WebSocket, comma-separated, e.g.
+# "https://app.example.org". The page's own host is always allowed; this is only
+# for a front end served from somewhere else. Read once at import.
+ALLOWED_ORIGINS = frozenset(
+    origin.strip().rstrip("/")
+    for origin in os.getenv("MERAKI_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+)
+
 # Text is sent to TTS in chunks so audio starts playing before the model has
 # finished writing. These are floors, not targets: the first chunk cuts at the
 # earliest sentence end past 12 characters, so a short opener like "Yes, that
@@ -137,9 +148,15 @@ class ApiKeys:
         )
 
     @classmethod
-    def from_payload(cls, payload: dict) -> "ApiKeys":
-        """Browser-supplied keys, falling back to the server's own."""
+    def from_payload(cls, payload: object) -> "ApiKeys":
+        """Browser-supplied keys, falling back to the server's own.
+
+        The payload comes straight off the wire, so it may be any JSON value; one
+        that is not an object is treated as having sent no keys.
+        """
         env = cls.from_env()
+        if not isinstance(payload, dict):
+            payload = {}
 
         def pick(*names: str, fallback: str) -> str:
             for name in names:

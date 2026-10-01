@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -17,14 +19,16 @@ from fastapi.templating import Jinja2Templates
 
 from . import protocol
 from .config import (
+    ALLOWED_ORIGINS,
     APP_NAME,
     APP_TAGLINE,
     APP_VERSION,
     ApiKeys,
 )
 from .pipeline import TurnPipeline
+from .security import origin_allowed
 from .services.stt import SpeechError, SpeechStream
-from .session import sessions
+from .session import sessions, valid_session_id
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,12 +38,11 @@ logging.basicConfig(
 logger = logging.getLogger("meraki")
 
 
-def _asset_version() -> str:
+def _compute_asset_version() -> str:
     """Cache-busting token for /static, from the newest file's mtime.
 
     Without this the browser keeps serving the CSS and JS it already has, so a
-    deploy ships new markup against old styles. Changes on every restart, which
-    is also what you want while developing.
+    deploy ships new markup against old styles.
     """
     try:
         newest = max(
@@ -50,6 +53,22 @@ def _asset_version() -> str:
     except (OSError, ValueError):
         return APP_VERSION
     return f"{int(newest):x}"
+
+
+_asset_v_cache: Optional[str] = None
+
+
+def _asset_version() -> str:
+    """The token, computed once per process rather than walking /static per hit.
+
+    Files only change between deploys, and a deploy restarts the process; under
+    `--reload` the module reloads on any change, so development still sees it.
+    """
+    global _asset_v_cache
+    if _asset_v_cache is None:
+        _asset_v_cache = _compute_asset_version()
+    return _asset_v_cache
+
 
 # One connection pool shared by every request; created on startup.
 _http: Optional[aiohttp.ClientSession] = None
@@ -108,7 +127,14 @@ def looks_like_echo(heard: str, spoken: str) -> bool:
 @contextlib.asynccontextmanager
 async def _lifespan(_app: FastAPI):
     global _http
-    _http = aiohttp.ClientSession()
+    # The default connector caps at 100 sockets (one Deepgram socket per live
+    # visitor, plus LLM and TTS calls) and has no connect timeout, so a black-holed
+    # host would hang a handshake indefinitely. total=None leaves long streams
+    # alone; llm.py and tts.py set their own per-read timeouts.
+    _http = aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(limit=400),
+        timeout=aiohttp.ClientTimeout(total=None, sock_connect=10),
+    )
     logger.info("%s v%s ready", APP_NAME, APP_VERSION)
     # Say so at boot rather than letting the first visitor discover it.
     missing = ApiKeys.from_env().missing()
@@ -133,12 +159,14 @@ templates = Jinja2Templates(directory="templates")
 # --- HTTP --------------------------------------------------------------------
 
 
-@app.get("/")
+# GET and HEAD both: load balancers and uptime checks probe with HEAD, and a 405
+# there reads as the service being down.
+@app.api_route("/", methods=["GET", "HEAD"])
 async def index(request: Request):
     return templates.TemplateResponse(
+        request,
         "index.html",
         {
-            "request": request,
             "app_name": APP_NAME,
             "tagline": APP_TAGLINE,
             "asset_v": _asset_version(),
@@ -151,16 +179,20 @@ async def index(request: Request):
 
 @app.get("/api/history/{session_id}")
 async def get_history(session_id: str):
+    if not valid_session_id(session_id):
+        return {"history": []}
     convo = sessions.peek(session_id)
     return {"history": [turn.as_dict() for turn in convo.turns] if convo else []}
 
 
 @app.delete("/api/history/{session_id}")
 async def clear_history(session_id: str):
+    if not valid_session_id(session_id):
+        return {"cleared": False}
     return {"cleared": sessions.clear(session_id)}
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
     return {
         "status": "ok",
@@ -175,6 +207,14 @@ async def health():
 
 @app.websocket("/ws")
 async def voice_socket(websocket: WebSocket) -> None:
+    # Before accept(), so a foreign page gets a refused upgrade, not a session.
+    if not origin_allowed(
+        websocket.headers.get("origin"),
+        websocket.headers.get("host", ""),
+        ALLOWED_ORIGINS,
+    ):
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     connection = _Connection(websocket)
     try:
@@ -238,8 +278,11 @@ class _Connection:
     async def _handshake(self) -> bool:
         """Wait for the opening config frame carrying keys and session id."""
         try:
-            message = await asyncio.wait_for(self._ws.receive_json(), timeout=15)
-        except (asyncio.TimeoutError, ValueError, TypeError):
+            frame = await asyncio.wait_for(self._ws.receive(), timeout=15)
+            # receive_json() would raise KeyError on a binary frame, outside any
+            # handler; take the raw frame and decode it ourselves.
+            message = json.loads(frame["text"])
+        except (asyncio.TimeoutError, ValueError, TypeError, KeyError):
             await self._send(
                 protocol.error("handshake", "Expected a config message.", fatal=True)
             )
@@ -266,7 +309,11 @@ class _Connection:
             )
             return False
 
-        self._session_id = str(message.get("session_id") or "").strip() or "anonymous"
+        # The browser's id is untrusted: keep it only if it is well formed, so
+        # reloading still resumes the conversation, and otherwise mint one. Never
+        # a shared fallback - everyone without an id would then share a history.
+        requested = message.get("session_id")
+        self._session_id = requested if valid_session_id(requested) else uuid.uuid4().hex
         # Model and voice are server-side settings. Anything the browser sends
         # for them is ignored on purpose.
         logger.info("Session %s configured", self._session_id)
@@ -408,6 +455,9 @@ class _Connection:
             self._spoken = ""
             self._first_audio_at = None
             self._echo_deadline = _now() + ECHO_GRACE_SECONDS
+            # A new turn: audio from the last one is not this turn's to cut off,
+            # and a silent turn must not inherit it as "still playing".
+            self._audio_pending = False
         elif kind == "audio":
             self._audio_pending = True
             if self._first_audio_at is None:
