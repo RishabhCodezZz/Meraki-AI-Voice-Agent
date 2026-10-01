@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# Nothing here writes to the repo, so the token gets read access and no more.
+permissions:
+  contents: read
+
 jobs:
   backend:
     name: Python tests

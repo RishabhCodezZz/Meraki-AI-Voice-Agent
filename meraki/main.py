@@ -26,7 +26,7 @@ from .config import (
     ApiKeys,
 )
 from .pipeline import TurnPipeline
-from .security import origin_allowed
+from .security import SecurityHeadersMiddleware, StaticCacheMiddleware, origin_allowed
 from .services.stt import SpeechError, SpeechStream
 from .session import sessions, valid_session_id
 
@@ -155,6 +155,8 @@ async def _lifespan(_app: FastAPI):
 app = FastAPI(
     title=f"{APP_NAME} Voice Agent", version=APP_VERSION, lifespan=_lifespan
 )
+app.add_middleware(StaticCacheMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 

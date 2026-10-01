@@ -8,6 +8,7 @@ is replaced with one that fails.
 from __future__ import annotations
 
 import logging
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -276,6 +277,53 @@ def test_index_does_not_walk_the_static_tree_per_request(client, monkeypatch):
     third = client.get("/").text
     assert len(calls) == 2
     assert "v=new" in third
+
+
+# --- headers and caching ------------------------------------------------------
+
+
+def test_every_response_has_security_headers(client):
+    # The page, an API route and a 404 all go through the same middleware.
+    for path in ("/", "/health", "/static/js/app.js", "/nothing-here"):
+        headers = client.get(path).headers
+        csp = headers["content-security-policy"]
+        assert "default-src 'self'" in csp, path
+        assert "frame-ancestors 'none'" in csp, path
+        assert "connect-src 'self' ws: wss:" in csp, path
+        assert headers["x-content-type-options"] == "nosniff", path
+        assert headers["referrer-policy"] == "no-referrer", path
+        assert "microphone=(self)" in headers["permissions-policy"], path
+
+
+def test_static_files_revalidate(client):
+    # Only the entry points carry ?v=; the modules they import and the worklet
+    # do not, so without this a browser may reuse them for days.
+    assert client.get("/static/js/app.js").headers["cache-control"] == "no-cache"
+    assert (
+        client.get("/static/js/worklets/capture-processor.js").headers["cache-control"]
+        == "no-cache"
+    )
+    # Only /static: the page and the API are not given a caching policy here.
+    assert "cache-control" not in client.get("/health").headers
+
+
+def test_the_page_has_no_inline_script(client):
+    # script-src 'self' would refuse it, and the keys flag used to live in one.
+    scripts = re.findall(r"<script[^>]*>", client.get("/").text)
+    assert scripts, "the page must still load app.js"
+    assert all("src=" in tag for tag in scripts)
+
+
+def test_keys_flag_is_a_body_data_attribute(client, monkeypatch):
+    for name in ("DEEPGRAM_API_KEY", "OLLAMA_API_KEY", "MURF_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    # ApiKeys.from_env reads the process environment, which load_dotenv may have
+    # filled from a developer's .env, so assert on both states explicitly.
+    assert 'data-keys-required="true"' in client.get("/").text
+
+    for name in ("DEEPGRAM_API_KEY", "OLLAMA_API_KEY", "MURF_API_KEY"):
+        monkeypatch.setenv(name, "test-key")
+    assert 'data-keys-required="false"' in client.get("/").text
 
 
 # --- keys ---------------------------------------------------------------------

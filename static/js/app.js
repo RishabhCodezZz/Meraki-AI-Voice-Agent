@@ -6,7 +6,7 @@ const KEY_FIELDS = ['deepgram', 'ollama', 'murf'];
 const STORAGE_KEYS = 'meraki.keys';
 // The server tells us whether it has keys of its own. If it does, visitors can
 // just talk; if not, they must bring their own.
-const KEYS_REQUIRED = window.MERAKI_KEYS_REQUIRED !== false;
+const KEYS_REQUIRED = document.body.dataset.keysRequired !== 'false';
 
 const el = (id) => document.getElementById(id);
 

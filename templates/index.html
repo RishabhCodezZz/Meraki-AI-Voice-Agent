@@ -12,7 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/css/styles.css?v={{ asset_v }}" />
 </head>
-<body data-state="idle">
+<body data-state="idle" data-keys-required="{{ 'true' if keys_required else 'false' }}">
 
   <div class="rule" aria-hidden="true"></div>
 
@@ -133,7 +133,6 @@
 
   <div id="toasts" class="toasts" aria-live="assertive"></div>
 
-  <script>window.MERAKI_KEYS_REQUIRED = {{ "true" if keys_required else "false" }};</script>
   <script type="module" src="/static/js/app.js?v={{ asset_v }}"></script>
 </body>
 </html>
