@@ -92,7 +92,7 @@ export function pickKeys(keys, fields) {
   const picked = {};
   if (!keys || typeof keys !== 'object') return picked;
   for (const name of fields) {
-    const value = Object.hasOwn(keys, name) ? keys[name] : undefined;
+    const value = Object.prototype.hasOwnProperty.call(keys, name) ? keys[name] : undefined;
     if (typeof value === 'string' && value) picked[name] = value;
   }
   return picked;

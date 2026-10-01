@@ -17,19 +17,26 @@ export class PlaybackGate {
     // Set when a turn ends, spent when it settles. Without it a stray idle
     // signal after an interrupt would settle a turn that was already handled.
     this.awaitingSettle = false;
+    // True once the current turn has had its end, and before any turn exists,
+    // so an end with no turn behind it is ignored. Deliberately not tied to
+    // cancel(): clearing the conversation cancels the gate while the server's
+    // turn carries on, and that turn's end must still settle.
+    this.ended = true;
   }
 
   /** A turn began; nothing settles until it ends. */
   turnStarted() {
     this.turnOpen = true;
     this.awaitingSettle = false;
+    this.ended = false;
   }
 
   /** The server has sent every chunk for this turn. */
   turnEnded() {
     // A failed synthesis sends error(tts) and then speech_done for one turn;
     // the second must not settle a turn that has already settled.
-    if (!this.turnOpen && !this.awaitingSettle) return;
+    if (this.ended) return;
+    this.ended = true;
     this.turnOpen = false;
     this.awaitingSettle = true;
     this.check();

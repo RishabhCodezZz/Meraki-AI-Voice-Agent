@@ -100,3 +100,51 @@ test('a second turnEnded after settling does not settle again', () => {
   gate.turnEnded();
   assert.equal(state.settled, 1);
 });
+
+test('a turn ending after a client-side cancel still settles, once', () => {
+  // Clearing the conversation cancels the gate, but the server's turn carries
+  // on and its speech_done still arrives. Ignoring that left the chip on
+  // "Speaking" with nothing to move it.
+  const { state, gate } = rig();
+  gate.turnStarted();
+  gate.cancel();
+  gate.turnEnded();
+  gate.playerIdle();
+  assert.equal(state.settled, 1);
+  gate.turnEnded();
+  assert.equal(state.settled, 1, 'a duplicate end after that stays quiet');
+});
+
+test('a turn ending after a cancel waits for audio that is still playing', () => {
+  const { state, gate } = rig();
+  gate.turnStarted();
+  gate.cancel();
+  state.playing = true;
+  gate.turnEnded();
+  assert.equal(state.settled, 0);
+  state.playing = false;
+  gate.playerIdle();
+  assert.equal(state.settled, 1);
+});
+
+test('an end with no turn behind it settles nothing', () => {
+  // An error frame while idle, or a stray speech_done, must not flip the chip
+  // to settled while the user is listening.
+  const { state, gate } = rig();
+  gate.turnEnded();
+  assert.equal(state.settled, 0);
+
+  gate.turnStarted();
+  gate.turnEnded();
+  assert.equal(state.settled, 1);
+  gate.turnEnded();
+  assert.equal(state.settled, 1);
+});
+
+test('a cancelled turn with no end after it settles nothing', () => {
+  const { state, gate } = rig();
+  gate.turnStarted();
+  gate.cancel();
+  gate.playerIdle();
+  assert.equal(state.settled, 0);
+});
