@@ -15,15 +15,15 @@ const HAS_ROUND_RECT =
   typeof CanvasRenderingContext2D !== 'undefined' &&
   typeof CanvasRenderingContext2D.prototype.roundRect === 'function';
 
-// The idle meter has to read as a meter, not as a flat line: 0.035 at 82px was
-// under three pixels. The floor is the lowest the breathing wave can reach.
-const IDLE_BASE = 0.07;
-const IDLE_WAVE = 0.025;
+// The idle meter has to read as a meter, not as a flat line or a dotted rule:
+// 0.035 at 82px was under three pixels, and 0.07 was still only five. The floor is the lowest the breathing wave can reach.
+const IDLE_BASE = 0.12;
+const IDLE_WAVE = 0.03;
 // Reduced motion trades the breathing and the travelling pulse for fixed levels.
 const THINKING_STATIC = 0.12;
 // Mirrors the values in styles.css, for the moment before the stylesheet applies.
 const FALLBACK_ACCENT = '#e8434a';
-const FALLBACK_IDLE = '#33414a';
+const FALLBACK_IDLE = '#3d4d57';
 
 export class Visualizer {
   /** Lowest target any bar gets while idle; exposed so tests can pin it. */

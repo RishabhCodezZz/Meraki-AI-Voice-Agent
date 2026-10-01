@@ -21,7 +21,7 @@
   --accent-soft: rgba(232, 67, 74, 0.13);
   --ok: #3ddc84;
   --ok-soft: rgba(61, 220, 132, 0.16);
-  --bar-idle: #33414a;
+  --bar-idle: #3d4d57;
 
   --radius-lg: 16px;
   --display: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
@@ -453,6 +453,7 @@ body[data-state="speaking"]::before { opacity: 1; }
 /* Fingers need a bigger target than pointers do. */
 @media (pointer: coarse) {
   .ghost, .chip--btn { min-height: 40px; }
+  .field__get { min-height: 24px; }
 }
 
 /* ---------- settings sheet ---------- */
@@ -534,9 +535,10 @@ body[data-state="speaking"]::before { opacity: 1; }
   font-family: var(--mono);
   font-size: 12px;
   color: var(--text-dim);
-  text-decoration: none;
+  /* Underlined at rest: colour alone does not say it is a link. */
+  text-decoration: underline;
 }
-.field__get:hover { color: var(--accent-text); text-decoration: underline; }
+.field__get:hover { color: var(--accent-text); }
 
 .primary {
   padding: 10px 16px;
@@ -596,8 +598,9 @@ body[data-state="speaking"]::before { opacity: 1; }
 }
 
 /* Short viewports: drop the headline so the meter and controls still fit.
-   560px, not 700px: a phone in portrait is 640-812px tall and has the room. */
-@media (max-height: 560px) {
+   Keeping the headline below this left the transcript a sliver; most phones
+   in portrait are taller than 680px and still get it. */
+@media (max-height: 680px) {
   .stage__title { display: none; }
   .stage__eyebrow { display: none; }
   .stage { gap: 12px; padding-top: 10px; }
@@ -606,7 +609,7 @@ body[data-state="speaking"]::before { opacity: 1; }
 
 /* Too short to share the screen between controls and a transcript: let the
    page scroll instead, and give the log a height worth reading. */
-@media (max-height: 520px) {
+@media (max-height: 560px) {
   body { height: auto; min-height: 100vh; min-height: 100dvh; overflow-y: auto; }
   .log { min-height: 220px; }
 }

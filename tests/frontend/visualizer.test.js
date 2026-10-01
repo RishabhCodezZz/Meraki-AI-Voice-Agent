@@ -14,10 +14,13 @@ import assert from 'node:assert/strict';
 
 let styleReads = 0;
 let reducedMotion = false;
+let frames = []; // requestAnimationFrame callbacks waiting to run
+let listeners = {}; // document listeners by event name
+let draws = 0;
 
 const ctxStub = {
   setTransform() {},
-  clearRect() {},
+  clearRect() { draws += 1; },
   beginPath() {},
   fill() {},
   fillRect() {},
@@ -36,7 +39,7 @@ globalThis.window = { addEventListener() {}, removeEventListener() {}, devicePix
 globalThis.document = {
   hidden: false,
   documentElement: {},
-  addEventListener() {},
+  addEventListener(type, fn) { listeners[type] = fn; },
   removeEventListener() {},
 };
 globalThis.getComputedStyle = () => {
@@ -48,12 +51,16 @@ globalThis.matchMedia = (query) => ({
   addEventListener() {},
   removeEventListener() {},
 });
-globalThis.requestAnimationFrame = () => 1;
+globalThis.requestAnimationFrame = (fn) => frames.push(fn);
 
 const { Visualizer } = await import('../../static/js/visualizer.js');
 
 function make({ reduced = false } = {}) {
   reducedMotion = reduced;
+  frames = [];
+  listeners = {};
+  draws = 0;
+  document.hidden = false;
   styleReads = 0;
   return new Visualizer(canvasStub);
 }
@@ -68,7 +75,10 @@ test('idle targets never fall below the floor, on any bar, at any time', () => {
       assert.ok(target >= Visualizer.idleFloor, `target ${target} under floor`);
     }
   }
-  assert.ok(Visualizer.idleFloor >= 0.045);
+  // A literal, not Visualizer.idleFloor: that is derived from the same
+  // constants, so asserting against it could never fail.
+  assert.ok(Visualizer.idleFloor >= 0.08);
+  for (const target of viz.targets) assert.ok(target >= 0.08, `${target} reads as a dotted rule`);
 });
 
 test('blocked and connecting are drawn like idle, not left on stale targets', () => {
@@ -78,7 +88,7 @@ test('blocked and connecting are drawn like idle, not left on stale targets', ()
     viz.setState(state);
     viz.step();
     for (const target of viz.targets) {
-      assert.ok(target < 0.1, `${state} kept stale target ${target}`);
+      assert.ok(target < 0.2, `${state} kept stale target ${target}`);
       assert.ok(target >= Visualizer.idleFloor);
     }
   }
@@ -147,4 +157,69 @@ test('reduced motion skips redraws once the bars have settled', () => {
 
   viz.setState('thinking');
   assert.equal(viz.shouldDraw(), true, 'a state change must repaint');
+});
+
+/** Run the one pending frame, if any; returns whether there was one. */
+function tick() {
+  const next = frames.shift();
+  if (!next) return false;
+  next();
+  return true;
+}
+
+test('start() twice leaves exactly one frame in flight', () => {
+  const viz = make();
+  viz.start();
+  viz.start();
+  assert.equal(frames.length, 1);
+  tick();
+  assert.equal(frames.length, 1, 'each frame schedules exactly one successor');
+  viz.stop();
+});
+
+test('a visibilitychange while a frame is pending does not queue a second loop', () => {
+  const viz = make();
+  viz.start();
+  listeners.visibilitychange(); // tab shown again; a frame is already queued
+  listeners.visibilitychange();
+  assert.equal(frames.length, 1);
+  viz.stop();
+});
+
+test('the loop lapses while the tab is hidden and resumes on visibilitychange', () => {
+  const viz = make();
+  viz.start();
+  tick(); // a normal frame
+
+  document.hidden = true;
+  tick(); // the frame already queued runs, then must not reschedule
+  assert.equal(frames.length, 0, 'hidden tab must not keep requesting frames');
+
+  document.hidden = false;
+  listeners.visibilitychange();
+  assert.equal(frames.length, 1, 'becoming visible restarts the loop');
+  viz.stop();
+});
+
+test('with reduced motion the loop stops painting once nothing has changed', () => {
+  const viz = make({ reduced: true });
+  viz.start();
+  for (let i = 0; i < 60; i++) tick(); // easing settles, last paint happens
+  draws = 0;
+  for (let i = 0; i < 20; i++) tick();
+  assert.equal(draws, 0, 'idle frames must not repaint');
+
+  viz.setState('thinking');
+  tick();
+  assert.equal(draws, 1, 'a state change repaints');
+  viz.stop();
+});
+
+test('without reduced motion every frame paints', () => {
+  const viz = make();
+  viz.start();
+  draws = 0;
+  for (let i = 0; i < 5; i++) tick();
+  assert.equal(draws, 5);
+  viz.stop();
 });
