@@ -360,8 +360,15 @@ The original was a single 590-line `app.py` plus one 390-line HTML file. Audited
 ## 8. Verified against live APIs (2026-09-07)
 
 Not inferred - actually run, against the code as it was on that date. The
-2026-10-02 branch changed how chunks are delivered, the echo filter and the
-dependencies, and none of this has been re-measured live since.
+2026-10-02 branch changed how chunks are delivered, the echo filter, the model
+and the dependencies. Only latency was re-measured since (next paragraph); the
+Deepgram and Murf bullets below were not.
+
+Re-measured 2026-10-02 (ten turns, ten different questions, `gemma4:31b`, server
+side from transcript to frame sent, excluding Deepgram's 350 ms endpointing):
+first token median 0.62 s (0.53-1.50), first audio frame median 1.28 s
+(0.86-2.48), whole reply sent median 1.59 s (1.20-2.48). On the same day
+`nemotron-3-nano:30b` took 18-30 s to its first token.
 
 - Deepgram transcribed a 3.3s sample word-perfect, and `speech_final` fires once
   trailing silence arrives. Without trailing silence it never fires, and since a

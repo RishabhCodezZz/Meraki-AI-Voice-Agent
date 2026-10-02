@@ -3,12 +3,15 @@
 **[Try it live →](https://meraki-ai-voice-agent.onrender.com)** &nbsp;·&nbsp;
 [![CI](https://github.com/RishabhCodezZz/Meraki-AI-Voice-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/RishabhCodezZz/Meraki-AI-Voice-Agent/actions/workflows/ci.yml)
 
-> Hosted on a free instance, which sleeps after 15 minutes idle — the first load
-> can take 30–60 seconds to wake. It is not broken, it is yawning.
+> **To try the demo you need your own API keys** for Deepgram, Ollama and Murf.
+> All three have a free tier, and the dialog that opens on your first visit links
+> to each signup page. The keys stay in your browser; the server holds them only
+> for the length of your connection.
 >
-> The demo sets no server keys, so it asks for your own. All three are free to
-> sign up for and the dialog links straight to each one; nothing is stored
-> anywhere but your browser.
+> It is hosted on a free instance that sleeps after 15 minutes idle. The first
+> load can take 30–60 seconds to wake, and the page keeps retrying for up to a
+> minute ("Waking the server…") before it gives up. It is not broken, it is
+> yawning.
 
 Your friendly neighbourhood AI — a real-time voice agent that talks back before
 it has finished thinking.
@@ -211,13 +214,20 @@ disappeared.
 
 ## Measured
 
-One turn, end to end, against live APIs:
+Ten turns end to end against the live APIs on 2026-10-02, ten different
+questions, one turn each, on a laptop on a home connection. The clock starts when
+the transcript reaches the pipeline and stops when the server sends each frame, so
+it leaves out Deepgram's 350 ms endpointing and the browser's decode time.
 
-| | |
-|---|---|
-| First token from the model | ~0.65 s |
-| First audio reaching the browser | **~1.2–1.9 s** |
-| Transcription accuracy | word-perfect on a clean 3.3 s sample |
+| Server time from transcript | Median | Range |
+|---|---|---|
+| First token from the model | 0.62 s | 0.53–1.50 s |
+| **First audio frame sent** | **1.28 s** | 0.86–2.48 s |
+| Whole reply sent | 1.59 s | 1.20–2.48 s |
+
+The model stayed under 1 s to its first token except once. The slow runs spent
+their extra time between the first token and the first audio, which is chunking
+plus Murf, not the model.
 
 Time to first audio is the number that matters. It started at 4.0 s:
 
@@ -225,12 +235,22 @@ Time to first audio is the number that matters. It started at 4.0 s:
 |---|---|
 | Cut the first chunk on a clause, not a sentence | 4.0 s → 3.2 s |
 | Murf's streaming endpoint instead of `/v1/speech/generate` | 3.2 s → ~1.4 s |
+| A faster model, `gemma4:31b` (see below) | ~1.4 s → 1.28 s median (different days, so not like for like) |
 
-The first was a measurement surprise: the persona asks for one-sentence replies,
-so a sentence-only rule meant the only boundary was at the very end and the
-pipelining never engaged at all. The second is simply a much faster endpoint —
-measured on identical text, `generate` took 2865 ms to return anything, while
-`stream` delivers its first byte in 150–280 ms.
+The first two were measured on 2026-09-07, before the hardening work; they were
+single runs, not a median. The first was a measurement surprise: the persona asks
+for one-sentence replies, so a sentence-only rule meant the only boundary was at
+the very end and the pipelining never engaged at all. The second is simply a much
+faster endpoint. Measured on identical text, `generate` took 2865 ms to return
+anything, while `stream` delivers its first byte in 150–280 ms.
+
+The third row is a smaller gain than it looks. What the model switch really
+bought is consistency. On the day of the 10-run test, `nemotron-3-nano:30b` took
+18–30 s to produce its first token (six runs out of six) and first audio arrived
+19–30 s after the question. `gemma4:31b` never went past 1.5 s to its first token.
+
+Not re-measured since 2026-09-07: transcription accuracy (word-perfect on a clean
+3.3 s sample).
 
 ## Engineering notes
 
@@ -248,6 +268,23 @@ task through normal exception propagation. The partial reply is recorded in a
 `finally`, so an interrupted answer still enters history. The browser does not
 wait for the server to confirm: it flushes its own queue the moment it sees a
 second word.
+
+**What a review found.** Before this version, a review pass (run with AI reviewers)
+read the whole codebase and found two bugs the tests had not. Audio was held back until three
+chunks were queued or the reply ended, so one- and two-chunk replies waited for
+the whole model response. And barge-in did nothing once the model had finished
+writing, which is almost always the case, because speech synthesis finishes a few
+seconds before the browser has played it out. Both are fixed, and each has a test
+that was seen to fail first.
+
+**Measure the model too.** In a live test the agent seemed to go silent: the first
+token took 15–30 s, so replies were being talked over, and cancelled, before they
+arrived. Murf and the network were fine. The model, `nemotron-3-nano:30b`, had
+answered in 207 ms when first measured on 2026-09-07 and was now the slowest. The
+fix was to time the candidates on the same key, not to change the code, and
+`gemma4:31b` answered in about 0.5 s. `gpt-oss:20b` returned an empty reply and
+two others needed paid credits. The default is a constant in `config.py` with the
+numbers next to it, so the next person knows to re-measure before changing it.
 
 **No threads.** Deepgram's streaming API is a plain WebSocket, so the entire
 backend is single-threaded asyncio. An earlier version used a vendor SDK whose
