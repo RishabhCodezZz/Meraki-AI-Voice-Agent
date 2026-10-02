@@ -82,6 +82,11 @@ let muteReply = false;
 // The connect attempt a start is currently making, hoisted so a Cancel (which
 // runs stopRecording, not the start's own finally) can close its socket at once.
 let pendingAttempt = null;
+// True from the moment a start begins until it has succeeded, failed or been
+// cancelled: the whole connect, retries and microphone prompt included. Cancel
+// is decided on this, not on what the chip says, because other handlers (Clear,
+// saving keys) call restIdle() in the middle of a start.
+let starting = false;
 
 // --- session -----------------------------------------------------------------
 
@@ -181,6 +186,9 @@ function setState(state, label, { opensKeys = false } = {}) {
 
 /** What the chip should read when no conversation is running. */
 function restIdle() {
+  // A start in progress owns the chip, hint and button; it settles them itself
+  // when it ends, after clearing `starting`.
+  if (starting) return;
   if (!supported) {
     setState('blocked', 'Unsupported');
     ui.hint.textContent = supportReason;
@@ -520,6 +528,7 @@ async function startRecording() {
   }
 
   const mine = ++generation;
+  starting = true;
   const cancelled = () => mine !== generation;
   const attempt = { ws: null };
   pendingAttempt = attempt;
@@ -533,7 +542,7 @@ async function startRecording() {
   ui.micLabel.textContent = 'Cancel';
 
   const showWaking = () => {
-    if (cancelled() || uiState !== 'connecting') return;
+    if (cancelled() || !starting) return;
     setState('connecting', 'Waking the server…');
     ui.hint.textContent = 'A sleeping free server can take up to a minute.';
   };
@@ -606,6 +615,7 @@ async function startRecording() {
     }
 
     recording = true;
+    starting = false; // before the state below, or restIdle() would ignore it
     ui.micBtn.dataset.active = 'true';
     ui.micLabel.textContent = 'Stop';
     setState('listening', 'Listening');
@@ -621,6 +631,8 @@ async function startRecording() {
     // cancelled start) is ours to close; the live one is stopRecording's. The
     // same goes for a mic that a stop never got to see.
     if (attempt.ws && attempt.ws !== socket) closeQuietly(attempt.ws);
+    // Only this start's own end: a newer start may already own the flag.
+    if (!cancelled()) starting = false;
     if (cancelled() && capture && capture !== mic) capture.stop();
     if (pendingAttempt === attempt) pendingAttempt = null;
   }
@@ -628,6 +640,7 @@ async function startRecording() {
 
 async function stopRecording({ silent = false } = {}) {
   generation++; // cancels a start that is still waiting on something
+  starting = false; // ahead of restIdle() below, which would otherwise be skipped
   recording = false;
   ui.micBtn.dataset.active = 'false';
   ui.micBtn.disabled = !supported;
@@ -663,7 +676,7 @@ function toggleRecording() {
   if (recording) stopRecording();
   // Still connecting: the button says Cancel. Bumping the generation (inside
   // stopRecording) is what makes the in-flight start and its retries give up.
-  else if (uiState === 'connecting') stopRecording({ silent: true });
+  else if (starting) stopRecording({ silent: true });
   else startRecording();
 }
 
