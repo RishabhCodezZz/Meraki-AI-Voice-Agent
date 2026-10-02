@@ -328,10 +328,15 @@ The original was a single 590-line `app.py` plus one 390-line HTML file. Audited
   WebSocket instead of a synchronous SDK — which is what let the threading layer
   go away. AssemblyAI measures better on realtime accuracy benchmarks; that was
   the trade.
-- **Nemotron 3 Nano, locked.** On a voice agent, time-to-first-token is heard
-  directly as dead air, and Nano is the fastest model on Ollama Cloud's free
-  tier. Falcon was requested but is not an Ollama Cloud model at all (and is
-  TII's, not ours), so there was nothing faster to move to.
+- **Gemma 4 31B, locked (was Nemotron 3 Nano until 2026-10-02).** On a voice
+  agent, time-to-first-token is heard directly as dead air. Nano was the fastest
+  on the free tier when first measured (207 ms), but on 2026-10-02 it took 18-30 s
+  to the first token on six runs out of six, so replies arrived after the user had
+  already talked over them (a >= 2 word partial cancels the turn). `gemma4:31b` on
+  the same key: ~0.5 s. `gpt-oss:20b` returned an empty reply; `glm-5.3-flash` and
+  `deepseek-v4.1-flash` need paid credits. Re-measure before changing it again.
+  Falcon was requested earlier but is not an Ollama Cloud model at all (and is
+  TII's, not ours).
 - **Model and voice are server-side, not user-selectable.** The page does not
   ask and the handshake ignores any `model` / `voice_id` a client sends. Change
   them with `MERAKI_MODEL` / `MERAKI_VOICE_ID` / `MERAKI_VOICE_STYLE`.

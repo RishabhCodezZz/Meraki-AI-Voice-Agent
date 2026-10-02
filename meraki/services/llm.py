@@ -7,9 +7,10 @@ Endpoint contract (https://docs.ollama.com/api/chat):
   -> newline-delimited JSON; incremental text at ``message.content``,
      terminated by a chunk with ``done: true``.
 
-``think`` is sent as false because the Nemotron models are reasoning models.
-Reasoning tokens arrive before any speakable text, so on a voice agent they buy
-nothing and cost seconds of silence.
+``think`` is sent as false because reasoning models (the Nemotron family, for
+one) emit reasoning tokens before any speakable text, which on a voice agent buy
+nothing and cost seconds of silence. Models without a reasoning mode accept and
+ignore it.
 """
 
 from __future__ import annotations

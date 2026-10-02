@@ -97,10 +97,11 @@ without ending the conversation.
 Both are fixed server-side and cannot be changed from the browser — the page
 never asks, and anything a client sends for them is ignored.
 
-- **`nemotron-3-nano:30b`** on Ollama Cloud. It is the fastest model on the free
-  tier, which is the property that matters here: time to first token is heard
-  directly as dead air. Nemotron is a reasoning model, so requests send
-  `think: false` — reasoning tokens arrive before anything speakable and buy
+- **`gemma4:31b`** on Ollama Cloud. Time to first token is the property that
+  matters here: it is heard directly as dead air. On 2026-10-02 this model
+  answered in about 0.5 s on the free tier while `nemotron-3-nano:30b`, the
+  original choice, took 18–30 s. Requests send `think: false`, because a
+  reasoning model's reasoning tokens arrive before anything speakable and buy
   nothing when the output is audio.
 - **`en-US-natalie` with the `Conversational` style.** The style does more for
   how friendly it sounds than the choice of voice does; it is the difference
