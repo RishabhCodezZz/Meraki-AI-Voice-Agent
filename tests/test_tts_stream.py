@@ -7,7 +7,6 @@ becomes available rather than what Murf returns.
 from __future__ import annotations
 
 import asyncio
-import time
 
 import pytest
 
@@ -42,24 +41,30 @@ def test_first_audio_is_yielded_before_the_text_stream_ends(monkeypatch):
 
     monkeypatch.setattr(tts, "synthesize", fake_synth)
 
+    release = asyncio.Event()
+
     async def text():
         yield "Hello there, friend. "
-        await asyncio.sleep(0.6)
+        # The second token is not available until the consumer has been handed
+        # the first audio. No clock involved: if delivery waits for the text to
+        # end, the two wait on each other and the timeout below fires.
+        await release.wait()
         yield "More text here."
 
     async def go():
-        start = time.monotonic()
-        first_at = None
         out = []
+        released_after_first_audio = False
         async for audio in tts.stream_speech(None, "key", text()):
-            if first_at is None:
-                first_at = time.monotonic() - start
+            if not out:
+                released_after_first_audio = not release.is_set()
+                release.set()
             out.append(audio)
-        return first_at, out
+        return released_after_first_audio, out
 
-    first_at, out = run(go())
+    # The timeout only bounds a failure; it is never reached when this passes.
+    first_before_second_token, out = run(asyncio.wait_for(go(), timeout=10))
 
-    assert first_at < 0.4
+    assert first_before_second_token
     assert len(out) == 2
 
 
