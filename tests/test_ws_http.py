@@ -144,6 +144,18 @@ def test_a_valid_session_id_is_kept_so_the_url_link_still_works(
     assert seen_session_ids == ["my-session_01"]
 
 
+def test_only_a_short_prefix_of_a_session_id_reaches_the_log(
+    client, caplog, keys_present, seen_session_ids
+):
+    """The id is a bearer token for /api/history/{id}; logs must not carry it."""
+    caplog.set_level(logging.DEBUG)
+
+    _handshake(client, {"type": "config", "session_id": "secretid-0123456789"})
+
+    assert "secretid-0123456789" not in caplog.text
+    assert "secret" in caplog.text  # six characters still tell sessions apart
+
+
 def test_two_clients_without_an_id_do_not_share_a_conversation(
     client, keys_present, seen_session_ids
 ):

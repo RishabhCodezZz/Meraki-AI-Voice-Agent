@@ -96,6 +96,16 @@ ECHO_GRACE_SECONDS = 2.0
 # Tests replace this to control the clock.
 _now = time.monotonic
 
+
+def _short_id(session_id: str) -> str:
+    """First six characters of a session id, for logs.
+
+    The full id is a bearer token for GET/DELETE /api/history/{id}, and INFO
+    lines end up in whoever's log viewer; six characters still tell sessions
+    apart.
+    """
+    return session_id[:6]
+
 _WORDS = re.compile(r"[a-z0-9']+")
 
 
@@ -275,7 +285,7 @@ class _Connection:
 
         self._pump = asyncio.create_task(self._drain_speech_events())
         await self._send(protocol.ready())
-        logger.info("Session %s live", self._session_id)
+        logger.info("Session %s live", _short_id(self._session_id))
 
         await self._receive_loop()
 
@@ -323,7 +333,7 @@ class _Connection:
         self._session_id = requested if valid_session_id(requested) else uuid.uuid4().hex
         # Model and voice are server-side settings. Anything the browser sends
         # for them is ignored on purpose.
-        logger.info("Session %s configured", self._session_id)
+        logger.info("Session %s configured", _short_id(self._session_id))
         return True
 
     # -- inbound ------------------------------------------------------------
@@ -343,7 +353,7 @@ class _Connection:
             if not text:
                 continue
             if text == "stop":
-                logger.info("Session %s stopped recording", self._session_id)
+                logger.info("Session %s stopped recording", _short_id(self._session_id))
                 break
 
     async def _drain_speech_events(self) -> None:
@@ -396,7 +406,10 @@ class _Connection:
             elif kind == "closed":
                 # Teardown cancels this task before closing the stream, so
                 # reaching here means Deepgram went away on its own.
-                logger.warning("Session %s lost its transcription stream", self._session_id)
+                logger.warning(
+                    "Session %s lost its transcription stream",
+                    _short_id(self._session_id),
+                )
                 await self._send(
                     protocol.error(
                         "stt", "The transcription stream ended.", fatal=True
@@ -453,7 +466,7 @@ class _Connection:
             + len(self._spoken) / ECHO_CHARS_PER_SECOND
             + ECHO_GRACE_SECONDS
         )
-        return now < max(self._echo_deadline, playback_ends)
+        return now < playback_ends
 
     async def _send(self, payload: dict) -> None:
         """Serialised send that tolerates a socket closing underneath us."""
@@ -486,11 +499,17 @@ class _Connection:
 
     async def close(self) -> None:
         try:
-            await self._cancel_turn(notify=False)
+            # Pump first. It is the only thing that starts turns, and it does so
+            # synchronously right after its own _cancel_turn returns, so once it
+            # is gone any turn that exists is already in self._turn. The other
+            # way round, a final delivered while the old turn unwound started a
+            # new one that nobody cancelled and that outlived the socket.
             if self._pump is not None:
                 self._pump.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._pump
+                # asyncio.wait, not suppress(CancelledError) around an await:
+                # that would also swallow a cancel aimed at close() itself.
+                await asyncio.wait({self._pump})
+            await self._cancel_turn(notify=False)
             if self._speech is not None:
                 try:
                     await self._speech.close()
@@ -499,4 +518,4 @@ class _Connection:
         finally:
             with contextlib.suppress(RuntimeError):
                 await self._ws.close()
-            logger.info("Session %s closed", self._session_id or "?")
+            logger.info("Session %s closed", _short_id(self._session_id) or "?")

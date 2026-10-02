@@ -292,3 +292,57 @@ def test_close_still_closes_the_socket_when_speech_close_raises():
         return ws
 
     assert asyncio.run(scenario()).closed is True
+
+
+def test_close_does_not_let_the_pump_start_a_turn_while_the_old_one_unwinds():
+    """A final arriving during teardown must not leave a turn nobody cancels.
+
+    close() used to wait for the old turn to unwind *before* stopping the pump.
+    In that window the pump took a final, started a new turn, and the turn then
+    ran to completion after the socket was closed, spending the visitor's quota
+    and writing a phantom exchange into history. Assertions run inside the
+    coroutine: checked after asyncio.run returns, the orphan is already gone.
+    """
+
+    async def scenario():
+        ws = FakeWebSocket()
+        conn = _Connection(ws)
+
+        class Speech(FakeSpeech):
+            async def close(self):
+                pass
+
+        conn._speech = Speech()
+        conn._session_id = "test"
+        completed: list[str] = []
+        started: list[asyncio.Task] = []
+
+        async def run_turn(text):
+            started.append(asyncio.current_task())
+            await asyncio.sleep(0.3)
+            completed.append(text)  # only reached by a turn nobody cancelled
+
+        conn._run_turn = run_turn
+
+        async def slow_to_unwind():
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.2)
+                raise
+
+        conn._pump = asyncio.create_task(conn._drain_speech_events())
+        conn._turn = asyncio.create_task(slow_to_unwind())
+        await asyncio.sleep(0)
+
+        closing = asyncio.create_task(conn.close())
+        await asyncio.sleep(0.05)  # close() is now waiting on the old turn
+        await conn._speech.events.put({"kind": "final", "text": "tell me more"})
+        await closing
+
+        await asyncio.sleep(0.5)  # long enough for an orphan to finish
+        assert completed == [], "a turn started during teardown ran to completion"
+        assert all(task.done() for task in started), "a turn outlived close()"
+        assert ws.closed is True
+
+    asyncio.run(scenario())

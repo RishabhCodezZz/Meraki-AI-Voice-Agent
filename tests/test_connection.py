@@ -210,7 +210,6 @@ def test_echo_window_stretches_with_the_audio_that_has_started():
     """A long reply keeps playing well past the grace period after the text."""
     conn = _Connection(FakeWebSocket())
     conn._spoken = "x" * int(ECHO_CHARS_PER_SECOND * 10)  # ~10s of speech
-    conn._echo_deadline = ECHO_GRACE_SECONDS
     conn._first_audio_at = 100.0
 
     with mock.patch("meraki.main._now", lambda: 100.0 + 10 + ECHO_GRACE_SECONDS - 0.1):
