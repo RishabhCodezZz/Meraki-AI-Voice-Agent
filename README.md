@@ -42,7 +42,9 @@ browser stops playing at once, the server cancels the in-flight turn mid-request
 (even a reply whose text finished long ago but is still being spoken), and it
 starts listening to you instead. Meraki's own voice coming back through your
 speakers is recognised by matching the transcript against what it is saying, so
-it does not interrupt itself; a lone "yes" or "no" is never mistaken for echo.
+it mostly does not interrupt itself (on speakers at volume it can still
+self-trigger; see CLAUDE.md open items); a lone "yes" or "no" is never mistaken
+for echo.
 
 ## Running it yourself
 
@@ -147,11 +149,11 @@ render.yaml           the Render Blueprint
 
 ```bash
 pip install -r requirements-dev.txt       # the app's dependencies, pytest and httpx2
-python -m pytest tests/ -q                # 136 backend
-node --test "tests/frontend/*.test.js"    # 96 browser logic
+python -m pytest tests/ -q                # 140 backend
+node --test "tests/frontend/*.test.js"    # 102 browser logic
 ```
 
-232 tests, no network and no keys, run on every push and pull request. They
+242 tests, no network and no keys, run on every push and pull request. They
 cover the parts where being wrong is quiet rather than loud:
 
 - **Chunk splitting** — every character survives, the first chunk stays short,

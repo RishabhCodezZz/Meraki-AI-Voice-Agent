@@ -40,7 +40,7 @@ mic ──► PCM16 @16kHz ──► Deepgram Nova-3 ──► Ollama Cloud ─�
 | `static/js/audio-capture.js` | getUserMedia → AudioWorklet → PCM16 |
 | `static/js/audio-player.js` | `SpeechPlayer`: gapless scheduled playback, serialised decoding, flushable |
 | `static/js/playback-gate.js` | `PlaybackGate`: the one place that decides "Speaking" has really ended |
-| `static/js/support.js` | Pure helpers: `detectSupport`, `describeStartError`, `withTimeout`, `retryWithin`, `shouldRetryConnect`, `makeSessionId`, `isValidSessionId`, `pickKeys` |
+| `static/js/support.js` | Pure helpers: `detectSupport`, `describeStartError`, `withTimeout`, `retryWithin`, `shouldRetryConnect`, `makeSessionId`, `isValidSessionId`, `pickKeys`, `isMicBlocked`, `endsTurn` |
 | `static/js/visualizer.js` | The bar meter |
 | `static/js/worklets/capture-processor.js` | Runs on the audio thread |
 | `requirements.txt` | Runtime dependencies, pinned |
@@ -75,9 +75,10 @@ the dev file, because Starlette 1.x's `TestClient` imports `httpx2`.
   and `test_no_module_holds_keys_of_its_own` guards against it returning.
 - **The page knows whether it must demand keys.** `keys_required` is passed to
   the template from `ApiKeys.from_env().missing()` and rendered as
-  `<body data-keys-required>`, so a deployment with its own keys does not shove
-  a dialog at first-time visitors. It is a data attribute, not an inline script,
-  because the CSP has no `unsafe-inline`.
+  `<body data-keys-required="true|false">`, so a deployment with its own keys
+  does not shove a dialog at first-time visitors. `app.js` treats anything but
+  `'false'` as required. It is a data attribute, not an inline script, because
+  the CSP has no `unsafe-inline`.
 - **The deployment deliberately sets no keys** (`render.yaml` declares none), so
   it costs nothing to run and every visitor spends their own free tier. Missing
   all three logs at INFO, not WARNING — that is the intended posture. *Partially*
@@ -102,7 +103,10 @@ the dev file, because Starlette 1.x's `TestClient` imports `httpx2`.
   (`isValidSessionId`, `makeSessionId`), so a `?s=` the server would refuse is
   replaced up front instead of loading history that never resumes.
 - **The WebSocket checks Origin.** Browsers do not apply the same-origin policy
-  to WebSockets, so any page could dial `/ws` and spend the visitor's keys.
+  to WebSockets, so any page could dial `/ws` from a visitor's browser. It could
+  not read this origin's localStorage, so the visitor's keys are safe; what it
+  could spend is the server's own environment keys, and the check stops other
+  websites' pages from using visitors' browsers to do that.
   `origin_allowed` (`security.py`) refuses the upgrade with close 1008, before
   `accept()`, unless the Origin's host equals the request's `Host` or the whole
   origin is listed in `MERAKI_ALLOWED_ORIGINS` (comma-separated, for a front end
@@ -123,7 +127,13 @@ the dev file, because Starlette 1.x's `TestClient` imports `httpx2`.
   producer to send a `reply_chunk` after `interrupted`. `_cancel_turn` waits
   with `asyncio.wait`, not `await turn` under `suppress(CancelledError)`, which
   would also swallow a cancel aimed at the caller; `close()` always reaches
-  `ws.close()`.
+  `ws.close()`. `close()` stops the pump *before* the turn: the pump is the only
+  thing that starts turns, and it does so synchronously after its own
+  `_cancel_turn`, so once it is gone any turn is already in `self._turn`. The
+  other order let a `final` arriving during teardown start a turn nobody
+  cancelled, which then spent quota and wrote history after the socket closed.
+  Logs carry only the first six characters of a session id (`_short_id`); the
+  full id is a bearer token for the history routes.
 - **Barge-in is two cuts that agree.** Server: a partial of
   ≥ `BARGE_IN_MIN_WORDS` (2) words, or any final that is not echo, calls
   `_cancel_turn(notify=True)`, which sends `interrupted` when a turn was
@@ -158,7 +168,8 @@ the dev file, because Starlette 1.x's `TestClient` imports `httpx2`.
 - **Every promise in `connect()` must settle.** A fatal error can arrive before
   `ready` (a bad Deepgram key does exactly this). Leaving the promise pending
   hangs `startRecording` with the mic button stuck disabled - that was a real
-  regression, fixed and covered by the smoke script.
+  regression. Nothing automated covers it now: `connect` lives in `app.js`,
+  which has no unit tests (§9).
 - **TTS chunk thresholds are floors, not targets.** `FIRST_CHUNK_MIN_CHARS` (12)
   is where we *start looking* for a boundary, so a short opener ships
   immediately. Raising it directly increases time-to-first-audio.
@@ -193,7 +204,8 @@ the dev file, because Starlette 1.x's `TestClient` imports `httpx2`.
 - **Security headers are middleware, and the CSP is strict.**
   `SecurityHeadersMiddleware` adds a CSP, `nosniff`, `no-referrer` and a
   microphone-only Permissions-Policy to every HTTP response, only where the
-  route has not set its own. Both middleware in `security.py` are plain ASGI
+  route has not set its own, except 500 responses produced by Starlette's
+  `ServerErrorMiddleware`. Both middleware in `security.py` are plain ASGI
   rather than `BaseHTTPMiddleware`, which wraps the response in a task and queue
   and sits in front of the WebSocket for no benefit. The CSP has no
   `unsafe-inline`, so the template has no inline `<script>` or `<style>`; a new
@@ -239,9 +251,14 @@ the dev file, because Starlette 1.x's `TestClient` imports `httpx2`.
   settles only when both have happened; the player's idle signal alone fires in
   every gap between chunks of one reply. `SpeechPlayer.enqueue` serialises
   decoding and `playing` includes `pending`, so a chunk still decoding counts as
-  playing. "Stop speaking" sets `muteReply` and drops the rest of the turn on the
-  client; the protocol has no message for it, and the next utterance replaces the
-  turn anyway.
+  playing. "Stop speaking" sets `muteReply`, which drops `reply_chunk` and
+  `audio` until the next `thinking`; the protocol has no message for it, so the
+  server keeps going and `reply_done` still adds the reply text to the
+  transcript. Clear is the exception: it also sets `discardReply`, so the cleared
+  transcript is not refilled by the reply that was in flight. Only error codes in
+  `TURN_ENDING_ERROR_CODES` (`llm`, `tts`, `network`, `internal`) end the gate's
+  turn; a non-fatal `stt` error mid-reply just toasts. A `tts` failure sends
+  `reply_done` before the `error`, so the text still reaches the transcript.
 - **The live caption reserves its space** (`.live { min-height }`) and is never
   hidden. Toggling it shoved the whole page down the moment Meraki started
   speaking and back up when it stopped.
@@ -369,7 +386,13 @@ dependencies, and none of this has been re-measured live since.
   aiohttp 3.14.3) is a major Starlette jump verified by both suites and a local
   boot only. `httpx2`, which `requirements-dev.txt` installs because Starlette's
   `TestClient` names it, has unconfirmed PyPI ownership; `pytest` and `httpx2`
-  are unpinned. Dev-only.
+  are pinned to ranges (`pytest>=8,<10`, `httpx2>=2.0,<3`). Dev-only.
+- The pinned stack (fastapi 0.142.2 / starlette 1.7.0 / uvicorn 0.54.0 /
+  aiohttp 3.14.3) was run green in a throwaway venv by the author of this branch;
+  the PR's CI must confirm it, including the `startup` job.
+- A refused Origin upgrade (close 1008) is indistinguishable from a sleeping
+  server in a browser, so the client treats it as a network failure and retries
+  it for the whole 60 s budget before showing the error.
 - No echo cancellation beyond the browser's `echoCancellation: true` and the
   text filter. On speakers at volume, barge-in can still self-trigger when the
   transcript of the echo is not a contiguous run of the spoken words. A
@@ -397,8 +420,8 @@ dependencies, and none of this has been re-measured live since.
 
 ## 10. Changelog
 
-- **2026-10-02** — Hardening and UI branch, v3.1.0. Backend tests 76 → 136
-  and browser-logic tests 21 → 96 (232 in all). Voice: TTS chunks are
+- **2026-10-02** — Hardening and UI branch, v3.1.0. Backend tests 76 → 140
+  and browser-logic tests 21 → 102 (242 in all). Voice: TTS chunks are
   delivered as they finish instead of waiting on the text stream; the style
   fallback is per `(voice, model)` and needs a 400 that mentions `style`; the
   echo filter matches whole words, needs two, and expires; `interrupted` covers
@@ -411,7 +434,12 @@ dependencies, and none of this has been re-measured live since.
   HEAD routes, asset token with a 2 s TTL, Deepgram rejection as code `keys`.
   UI: contrast, focus, live regions, short-viewport layout, guided key dialog,
   persistent error banner with Retry / Open Keys. Dependencies bumped; version
-  now has one source. Docs reconciled with all of it.
+  now has one source. Docs reconciled with all of it. Final-review fix wave:
+  `close()` stops the pump before the turn (no turn can start during teardown),
+  only `llm`/`tts`/`network`/`internal` errors end the gate's turn, Clear mutes
+  and discards the reply still in flight, `reply_done` precedes a `tts` error,
+  no Retry on a blocked microphone, no layout shift for Stop speaking on phones,
+  six-character session ids in logs, dev dependencies pinned to ranges.
 - **2026-09-07** — Deployed. Verified live over `wss://`: keyless handshake,
   bogus-key rejection and malformed-frame handling all correct, ~1.1s round trip.
 

@@ -1,9 +1,12 @@
 """Request-origin checks for the WebSocket, and response hardening for HTTP.
 
 Browsers do not apply the same-origin policy to WebSockets: any page a visitor
-opens can dial `wss://this-host/ws` from their browser. Here that would spend
-the visitor's own keys (or the server's, on a deployment that sets them) on a
-page they never meant to talk to, so the upgrade checks who is asking.
+opens can dial `wss://this-host/ws` from their browser. A foreign page cannot
+read this origin's localStorage, so it cannot spend the visitor's keys; what it
+could spend is the server's own environment keys, using the visitor's browser as
+the proxy. The upgrade checks who is asking so other websites' pages cannot.
+(A script with no Origin header passes, and can do the same; this guards
+browsers only.)
 
 The middleware below are plain ASGI rather than `BaseHTTPMiddleware`, which wraps
 the response in a task and queue (it interferes with streaming and cancellation)

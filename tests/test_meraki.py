@@ -289,10 +289,6 @@ def test_every_frame_carries_a_type():
     assert protocol.error("c", "m", fatal=True)["fatal"] is True
 
 
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
-
-
 # --- version -----------------------------------------------------------------
 
 
@@ -303,3 +299,7 @@ def test_version_has_one_source():
     from meraki import config
 
     assert config.APP_VERSION == meraki.__version__
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-v"]))
