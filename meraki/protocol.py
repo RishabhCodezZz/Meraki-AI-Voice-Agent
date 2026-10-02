@@ -28,7 +28,9 @@ Server -> client
     {"type": "final",    "text": str}
     {"type": "thinking"}
     {"type": "reply_chunk", "text": str}
-    {"type": "reply_done",  "text": str}
+    {"type": "reply_done",  "text": str}   the whole reply, once; also sent before
+                                      a ``tts`` error, so the text still reaches the
+                                      transcript when only the voice failed
     {"type": "audio", "seq": int, "data": <base64 mp3>}
     {"type": "speech_done"}
     {"type": "interrupted"}           user barged in; drop queued audio. Also sent

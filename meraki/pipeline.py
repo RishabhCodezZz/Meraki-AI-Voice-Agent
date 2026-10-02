@@ -75,7 +75,13 @@ class TurnPipeline:
         except llm.LLMError as exc:
             await self._send(protocol.error("llm", str(exc)))
         except tts.TTSError as exc:
-            # The text is already on screen; only the audio failed.
+            # Only the audio failed, but the text is on screen in the live
+            # caption alone until reply_done files it in the transcript. With a
+            # bad Murf key that would make every reply vanish. Same rule as the
+            # success path: nothing to file when the reply is empty.
+            done = "".join(reply_parts).strip()
+            if done:
+                await self._send(protocol.reply_done(done))
             await self._send(protocol.error("tts", str(exc)))
             await self._send(protocol.speech_done())
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:

@@ -248,6 +248,33 @@ def test_a_voice_failure_still_releases_the_ui(monkeypatch):
     assert "speech_done" in send.types()  # the release
 
 
+def test_a_voice_failure_keeps_the_reply_in_the_transcript(monkeypatch):
+    """Without reply_done the text lives only in the live caption and vanishes."""
+    monkeypatch.setattr(llm, "stream_reply", fake_llm(["Here you go. "]))
+    monkeypatch.setattr(tts, "stream_speech", fake_tts(error=tts.TTSError("Murf is down.")))
+
+    send = run_turn(Conversation())
+
+    types = send.types()
+    assert send.of("reply_done")[0]["text"] == "Here you go."
+    assert types.index("reply_done") < types.index("error")
+    assert types[-1] == "speech_done"
+
+
+def test_a_voice_failure_with_no_reply_text_sends_no_reply_done(monkeypatch):
+    async def fails_at_once(http, key, text_stream, voice_id=None):
+        raise tts.TTSError("Murf is down.")
+        yield  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr(llm, "stream_reply", fake_llm([]))
+    monkeypatch.setattr(tts, "stream_speech", fails_at_once)
+
+    send = run_turn(Conversation())
+
+    assert send.of("reply_done") == []
+    assert send.of("error")[0]["code"] == "tts"
+
+
 def test_an_unexpected_crash_does_not_leak_details(monkeypatch):
     monkeypatch.setattr(
         llm, "stream_reply", fake_llm([], error=ValueError("secret internal detail"))
