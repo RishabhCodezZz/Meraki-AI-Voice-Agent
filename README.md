@@ -30,14 +30,19 @@ Most hobby voice agents wait for the whole reply, synthesise it in one request,
 then play it. That's several seconds of silence after every question.
 
 Meraki pipelines instead. Reply text is cut into clause-sized chunks as it
-streams out of the model — the first chunk deliberately short — and each chunk
-is synthesised concurrently while the model keeps writing. Chunks are scheduled
-on the Web Audio clock in order, so playback is gapless. You hear the first
-words while the last ones are still being generated.
+streams out of the model — the first chunk deliberately short — and up to three
+chunks are synthesised concurrently while the model keeps writing. Each one is
+sent to the browser as soon as it and every earlier chunk are ready, without
+waiting for more text. Chunks are scheduled on the Web Audio clock in order, so
+playback is gapless. You hear the first words while the last ones are still
+being generated.
 
-It also listens while it speaks. Start talking over Meraki and the in-flight
-turn is cancelled mid-request, queued audio is dropped, and it starts listening
-to you instead.
+It also listens while it speaks. Talk over Meraki — two or more words — and the
+browser stops playing at once, the server cancels the in-flight turn mid-request
+(even a reply whose text finished long ago but is still being spoken), and it
+starts listening to you instead. Meraki's own voice coming back through your
+speakers is recognised by matching the transcript against what it is saying, so
+it does not interrupt itself; a lone "yes" or "no" is never mistaken for echo.
 
 ## Running it yourself
 
@@ -81,7 +86,9 @@ links to all three signup pages.
 Deployed from `render.yaml` as a Render Blueprint — the start command, health
 check and Python version all come from the repo rather than a dashboard form.
 
-Press **Start talking** and speak. Interrupt it whenever you like — it stops.
+Press **Start talking** and speak. Interrupt it whenever you like — it stops. The
+button reads **Cancel** while it connects, and **Stop speaking** cuts a reply off
+without ending the conversation.
 
 ## Model and voice
 
@@ -96,19 +103,26 @@ never asks, and anything a client sends for them is ignored.
 - **`en-US-natalie` with the `Conversational` style.** The style does more for
   how friendly it sounds than the choice of voice does; it is the difference
   between someone talking and someone reading. If a voice ever rejects the
-  style, synthesis retries once without it rather than failing the turn.
+  style (a 400 that names it), synthesis retries once without it and remembers
+  that for that voice and model, rather than failing the turn.
 
 Override either with `MERAKI_MODEL` / `MERAKI_VOICE_ID` / `MERAKI_VOICE_STYLE`
 in the environment.
+
+The WebSocket only accepts connections from the page's own host. To serve the
+front end from somewhere else, list its origin in `MERAKI_ALLOWED_ORIGINS`
+(comma-separated, e.g. `https://app.example.org`).
 
 ## Layout
 
 ```
 meraki/
-  main.py       FastAPI app, WebSocket connection handling
+  __init__.py   the version, written once
+  main.py       FastAPI app, WebSocket connection handling, echo filter
   pipeline.py   one conversational turn, cancellable for barge-in
   session.py    conversation history (LRU + TTL, in memory)
   protocol.py   the WebSocket message contract
+  security.py   Origin check, security headers, static revalidation
   config.py     settings, model lists, the persona
   services/
     stt.py      Deepgram streaming
@@ -118,33 +132,49 @@ static/js/
   app.js              wiring and UI state
   audio-capture.js    mic → PCM16
   audio-player.js     gapless scheduled playback
+  playback-gate.js    decides when "Speaking" has really ended
+  support.js          feature detection, errors, retry, session ids
   visualizer.js       the meter
   worklets/           capture runs on the audio thread
+tests/                backend, offline
+tests/frontend/       browser logic, via node --test
+requirements.txt      what the app needs
+requirements-dev.txt  plus pytest and httpx2, for the tests
+render.yaml           the Render Blueprint
 ```
 
 ## Tests
 
 ```bash
-pip install pytest
-python -m pytest tests/ -q                # 76 backend
-node --test "tests/frontend/*.test.js"    # 21 browser logic
+pip install -r requirements-dev.txt       # the app's dependencies, pytest and httpx2
+python -m pytest tests/ -q                # 136 backend
+node --test "tests/frontend/*.test.js"    # 96 browser logic
 ```
 
-97 tests, no network and no keys, run on every push. They cover the parts where
-being wrong is quiet rather than loud:
+232 tests, no network and no keys, run on every push and pull request. They
+cover the parts where being wrong is quiet rather than loud:
 
 - **Chunk splitting** — every character survives, the first chunk stays short,
   nothing exceeds the cap even with no punctuation to cut on.
 - **Deepgram turn assembly** — settled segments join into one utterance and
   nothing fires until endpointing does. Acting on `is_final` alone would chop
   sentences into fragments, each triggering its own reply.
-- **Barge-in** — an interrupted turn still records what was already spoken, so
-  the conversation stays coherent; a turn cancelled before any token records
-  nothing at all.
+- **Barge-in** — an interrupted turn still records what was already generated,
+  so the conversation stays coherent; a turn cancelled before any token records
+  nothing at all. `interrupted` is sent for a running turn or for audio still
+  audibly playing after the turn ended, and once per utterance.
+- **Echo** — whole-word matching (so "no" is not found inside "know"), a
+  two-word floor, and an expiry so an old reply cannot swallow a new answer.
+- **TTS delivery** — a finished chunk ships without waiting for more text, and
+  cancelling the consumer cancels every outstanding synthesis.
 - **Failure modes** — a TTS failure still releases the UI, an unexpected crash
   does not leak internal detail into a user-facing message.
-- **The Murf request shape** — the streaming endpoint is used and an unsupported
-  style is dropped and retried rather than failing the turn.
+- **The Murf request shape** — the streaming endpoint is used, and a 400 that
+  names the style drops it and retries, per voice and model; any other 400 does
+  not.
+- **The handshake and HTTP surface** — malformed first frames get typed errors,
+  session ids are validated, a foreign Origin is refused, security headers are
+  present, static files revalidate, and the history routes never create.
 - **Key isolation** — a visitor's key overrides the server's, a blank field
   falls back rather than blanking a working key, and no module anywhere holds
   credentials. That last one is a regression guard: the original build kept a
@@ -157,7 +187,10 @@ being wrong is quiet rather than loud:
   wrap here would be an audible click and quietly worse transcription.
 - **Playback scheduling** — chunks butt up against each other exactly, and audio
   that finishes decoding *after* the user interrupts is discarded rather than
-  speaking over them.
+  speaking over them. `PlaybackGate` leaves "Speaking" only when the server has
+  finished sending and the player has run dry, in either order.
+- **Start-up helpers** — the retry budget a cold start needs, the wording of a
+  microphone failure, feature detection, and session ids the server will keep.
 
 CI also boots the app and hits `/health`, which catches the class of break a unit
 test cannot: a bad import, a template that stopped rendering, a route that
@@ -169,7 +202,8 @@ disappeared.
   assistant's voice cannot feed back into the transcriber.
 - Conversation history lives in memory and is keyed by the session id in the URL
   — share the link or reload and the conversation continues. It does not survive
-  a server restart.
+  a server restart. An id the server will not accept (8–64 characters of
+  letters, digits, `_` and `-`) is replaced rather than trusted.
 - `Space` toggles the mic when nothing else is focused.
 
 ## Measured
@@ -208,7 +242,9 @@ immediately — raising it directly increases time-to-first-audio.
 **Barge-in as task cancellation.** A turn is one `asyncio.Task`. Interrupting
 cancels it, which unwinds the in-flight HTTP request and every pending synthesis
 task through normal exception propagation. The partial reply is recorded in a
-`finally`, so an interrupted answer still enters history.
+`finally`, so an interrupted answer still enters history. The browser does not
+wait for the server to confirm: it flushes its own queue the moment it sees a
+second word.
 
 **No threads.** Deepgram's streaming API is a plain WebSocket, so the entire
 backend is single-threaded asyncio. An earlier version used a vendor SDK whose

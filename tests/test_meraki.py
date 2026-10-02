@@ -291,3 +291,15 @@ def test_every_frame_carries_a_type():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# --- version -----------------------------------------------------------------
+
+
+def test_version_has_one_source():
+    # The version used to be written out in two files and drifted. config
+    # re-exports the package's, so /health, the page and the app title agree.
+    import meraki
+    from meraki import config
+
+    assert config.APP_VERSION == meraki.__version__

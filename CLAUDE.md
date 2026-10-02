@@ -12,7 +12,9 @@ Live at https://meraki-ai-voice-agent.onrender.com (free instance, sleeps after
 request — that is normal and not a failed deploy).
 
 A real-time voice agent. Rewritten from scratch in v3.0.0 (see §6 for what the
-original looked like and why none of it survived).
+original looked like and why none of it survived); now v3.1.0 after the
+hardening branch (§10). The version lives in `meraki/__init__.py` and nowhere
+else.
 
 ```
 mic ──► PCM16 @16kHz ──► Deepgram Nova-3 ──► Ollama Cloud ──► Murf ──► speakers
@@ -24,34 +26,44 @@ mic ──► PCM16 @16kHz ──► Deepgram Nova-3 ──► Ollama Cloud ─�
 
 | Path | Role |
 |---|---|
-| `meraki/main.py` | FastAPI app, HTTP routes, `_Connection` (one per browser) |
+| `meraki/__init__.py` | `__version__`, the only place the version is written; `config.APP_VERSION` re-exports it |
+| `meraki/main.py` | FastAPI app, HTTP routes, `_Connection` (one per browser), echo filter |
 | `meraki/pipeline.py` | `TurnPipeline` — one cancellable conversational turn |
 | `meraki/session.py` | `SessionStore` — history, LRU + TTL, in memory |
 | `meraki/protocol.py` | WebSocket message constructors; the wire contract |
+| `meraki/security.py` | WebSocket Origin check; ASGI middleware for security headers and `/static` revalidation |
 | `meraki/config.py` | Settings, model/voice lists, `ApiKeys`, system prompt |
 | `meraki/services/stt.py` | Deepgram streaming WebSocket |
 | `meraki/services/llm.py` | Ollama Cloud NDJSON streaming |
 | `meraki/services/tts.py` | Murf; chunking + pipelined synthesis |
-| `static/js/app.js` | UI wiring and state machine |
+| `static/js/app.js` | UI wiring and state machine: start/stop/connect, banner, key dialog |
 | `static/js/audio-capture.js` | getUserMedia → AudioWorklet → PCM16 |
-| `static/js/audio-player.js` | Gapless scheduled playback, flushable |
+| `static/js/audio-player.js` | `SpeechPlayer`: gapless scheduled playback, serialised decoding, flushable |
+| `static/js/playback-gate.js` | `PlaybackGate`: the one place that decides "Speaking" has really ended |
+| `static/js/support.js` | Pure helpers: `detectSupport`, `describeStartError`, `withTimeout`, `retryWithin`, `shouldRetryConnect`, `makeSessionId`, `isValidSessionId`, `pickKeys` |
 | `static/js/visualizer.js` | The bar meter |
 | `static/js/worklets/capture-processor.js` | Runs on the audio thread |
-| `tests/` | Offline unit tests; no keys needed |
-| `tests/frontend/` | Browser-logic tests via `node --test`, no dependencies |
-| `.github/workflows/ci.yml` | Runs both suites plus a boot check on every push |
+| `requirements.txt` | Runtime dependencies, pinned |
+| `requirements-dev.txt` | Runtime plus `pytest` and `httpx2` (what Starlette's `TestClient` imports) |
+| `render.yaml` | Render Blueprint: start command (with `--ws-max-size`), health check, Python version |
+| `tests/` | Offline unit tests; no keys needed. Barge-in, echo, TTS delivery and request shape, pipeline, STT turns, connection, handshake/HTTP hardening |
+| `tests/frontend/` | Browser-logic tests via `node --test`, no dependencies: capture, player, gate, support, visualizer |
+| `.github/workflows/ci.yml` | Runs both suites plus a boot check on every push to main and every pull request |
 
 ## 3. Running
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt       # runtime deps + pytest + httpx2
 python run.py                             # http://127.0.0.1:8000
 python -m pytest tests/ -q                # backend
 node --test "tests/frontend/*.test.js"    # browser logic, needs no npm install
 ```
 
-`.claude/launch.json` defines a `meraki` preview server (with `--reload`) for
-use with `preview_start`.
+`requirements.txt` alone is enough to run the app; the backend tests also need
+the dev file, because Starlette 1.x's `TestClient` imports `httpx2`.
+
+`.claude/launch.json` defines a `meraki` preview server (with `--reload` and
+`--ws-max-size 65536`) for use with `preview_start`.
 
 ## 4. Architecture facts — read before changing anything
 
@@ -62,8 +74,10 @@ use with `preview_start`.
   keys to module state** — one global dict is exactly the cross-user leak in §6,
   and `test_no_module_holds_keys_of_its_own` guards against it returning.
 - **The page knows whether it must demand keys.** `keys_required` is passed to
-  the template from `ApiKeys.from_env().missing()`, so a deployment with its own
-  keys does not shove a dialog at first-time visitors.
+  the template from `ApiKeys.from_env().missing()` and rendered as
+  `<body data-keys-required>`, so a deployment with its own keys does not shove
+  a dialog at first-time visitors. It is a data attribute, not an inline script,
+  because the CSP has no `unsafe-inline`.
 - **The deployment deliberately sets no keys** (`render.yaml` declares none), so
   it costs nothing to run and every visitor spends their own free tier. Missing
   all three logs at INFO, not WARNING — that is the intended posture. *Partially*
@@ -74,19 +88,64 @@ use with `preview_start`.
   all of it right; changing it and pushing updates the deployment.
 - **`ready` means everything is up**, including the Deepgram socket. It is sent
   after STT connects, not during the handshake — otherwise the browser goes and
-  asks for microphone permission before we know the STT key is even valid.
+  asks for microphone permission before we know the STT key is even valid. A
+  Deepgram 401/403 goes out as error code `keys` (not `stt`) so the browser
+  offers Open Keys rather than a Retry that can only fail the same way.
+- **The handshake is untrusted input.** `_handshake` turns every bad first frame
+  (binary, not JSON, nested deep enough to overflow the parser, not an object,
+  not `config`, or later than 15 s) into a typed fatal `handshake` error;
+  `keys` that is not an object counts as no keys. `session_id` is kept only if
+  it matches `[A-Za-z0-9_-]{8,64}` (`session.py`), otherwise the server mints a
+  `uuid4().hex`. There is deliberately no shared fallback: the old
+  `"anonymous"` put everyone who sent no id into one conversation. The history
+  routes ignore invalid ids. The client applies the same rule
+  (`isValidSessionId`, `makeSessionId`), so a `?s=` the server would refuse is
+  replaced up front instead of loading history that never resumes.
+- **The WebSocket checks Origin.** Browsers do not apply the same-origin policy
+  to WebSockets, so any page could dial `/ws` and spend the visitor's keys.
+  `origin_allowed` (`security.py`) refuses the upgrade with close 1008, before
+  `accept()`, unless the Origin's host equals the request's `Host` or the whole
+  origin is listed in `MERAKI_ALLOWED_ORIGINS` (comma-separated, for a front end
+  hosted elsewhere). No Origin header passes - curl and the tests are not
+  hijacked browsers. The comparison relies on Render's proxy handing the app
+  the Host unchanged; that has not been checked live (§9).
+- **Bounded on the way in and out.** `--ws-max-size 65536` (in `render.yaml`,
+  `run.py` and `launch.json`): mic frames are a few KiB and the default is
+  16 MiB. The shared aiohttp session uses `TCPConnector(limit=400)` (the
+  default of 100 caps the app at roughly 100 visitors, one Deepgram socket
+  each) and `sock_connect=10`, with `total=None` so a long reply is never cut
+  off (`llm.py` and `tts.py` set their own per-read timeouts).
 - **A turn is one cancellable task.** `_Connection._turn`. Barge-in cancels it,
   which unwinds the LLM request and any in-flight synthesis. `TurnPipeline.run`
   records the partial reply in its `finally`, so an interrupted answer is still
-  remembered.
-- **Barge-in fires on a partial of ≥ `BARGE_IN_MIN_WORDS` (2)**, not on finals.
-  One word is too twitchy against residual echo; waiting for a final is too slow
-  to feel like an interruption.
+  remembered. `TurnPipeline` wraps `stream_speech` in `aclosing`, so a cancel
+  that lands mid-send closes the generator at once instead of leaving its
+  producer to send a `reply_chunk` after `interrupted`. `_cancel_turn` waits
+  with `asyncio.wait`, not `await turn` under `suppress(CancelledError)`, which
+  would also swallow a cancel aimed at the caller; `close()` always reaches
+  `ws.close()`.
+- **Barge-in is two cuts that agree.** Server: a partial of
+  ≥ `BARGE_IN_MIN_WORDS` (2) words, or any final that is not echo, calls
+  `_cancel_turn(notify=True)`, which sends `interrupted` when a turn was
+  running *or* audio is still audibly playing (`_audio_pending` and
+  `_echo_active()`), once per utterance (`_interrupt_sent`, cleared when the
+  final starts a turn). The turn task ends when synthesis does, seconds before
+  the browser has played it out, so "nothing running" does not mean "nothing to
+  cut off". Client: `handleMessage` flushes the player itself on a ≥ 2-word
+  partial while playing, on any final, and on `thinking`, rather than waiting a
+  round trip for `interrupted`. One word on a partial is too twitchy against
+  residual echo; waiting for a final is too slow to feel like an interruption.
 - **Meraki's own voice is filtered by text, not by muting.** `looks_like_echo`
-  drops any transcript contained in what is currently being spoken. Muting the
-  mic during playback would also work and would remove barge-in, which is the
-  wrong trade. `_spoken` is held past the end of a turn on purpose — trailing
-  audio echoes too — and reset when the next turn starts.
+  drops a transcript only if it is a run of whole words contained in what is
+  being spoken and has at least `ECHO_MIN_WORDS` (2) of them: "no" is not found
+  inside "know", and a bare "yes" or "no" always gets through. It is consulted
+  only while `_echo_active()`: `ECHO_GRACE_SECONDS` (2 s) from `thinking`, then,
+  once audio starts, until `len(spoken) / ECHO_CHARS_PER_SECOND` (12) plus the
+  grace. Without that expiry `_spoken` lingered until the next turn and a phrase
+  said back minutes after a reply was swallowed. `_spoken` is still held past
+  the end of a turn on purpose (trailing audio echoes too) and reset on
+  `thinking`. Tests control the clock through `main._now`. Muting the mic during
+  playback would also work and would remove barge-in, which is the wrong trade.
 - **Deepgram's two flags are not interchangeable.** `is_final` means a segment is
   settled; `speech_final` means endpointing fired. Segments accumulate and the
   utterance is emitted on `speech_final`. Acting on `is_final` alone chops long
@@ -103,6 +162,18 @@ use with `preview_start`.
 - **TTS chunk thresholds are floors, not targets.** `FIRST_CHUNK_MIN_CHARS` (12)
   is where we *start looking* for a boundary, so a short opener ships
   immediately. Raising it directly increases time-to-first-audio.
+- **`stream_speech` delivers a chunk as soon as it and every earlier one are
+  done.** A producer task pulls text and starts synthesis (at most
+  `MAX_IN_FLIGHT`, 3, via a semaphore); the consumer takes the tasks from a
+  queue in order. It used to yield only once three tasks were queued or the text
+  ended, so one- and two-chunk replies waited for the whole LLM reply, and the
+  text side stalled because nothing pulled it while the consumer awaited audio.
+  Cancelling the consumer cancels the producer and every synth task, and closes
+  the text stream.
+- **The style fallback is per `(voice, model)`, and only on a 400 whose body
+  mentions `style`** (`_style_rejected`). It was a process-global flag flipped
+  by any Murf 400, so one unrelated rejection (out of credits) degraded every
+  visitor's voice until restart.
 - **Only the first chunk cuts on a clause** (`allow_clause`). The persona asks
   for one-sentence replies, so a sentence-only rule meant the single boundary
   was at the very end and pipelining never engaged. Measured 4.0s → 3.2s to
@@ -119,14 +190,58 @@ use with `preview_start`.
 - Frontend is ES modules, no build step, no framework. The only external
   dependency is Google Fonts (Space Grotesk + JetBrains Mono); everything else
   is served locally.
-- **Static URLs carry `?v={{ asset_v }}`**, a token derived from the newest
-  mtime under `static/`. Without it the browser keeps its cached CSS and JS, so
-  a deploy ships new markup against old styles — which is exactly what happened
-  during the redesign and looked like the CSS being broken.
+- **Security headers are middleware, and the CSP is strict.**
+  `SecurityHeadersMiddleware` adds a CSP, `nosniff`, `no-referrer` and a
+  microphone-only Permissions-Policy to every HTTP response, only where the
+  route has not set its own. Both middleware in `security.py` are plain ASGI
+  rather than `BaseHTTPMiddleware`, which wraps the response in a task and queue
+  and sits in front of the WebSocket for no benefit. The CSP has no
+  `unsafe-inline`, so the template has no inline `<script>` or `<style>`; a new
+  external origin must be added to `CONTENT_SECURITY_POLICY` or the browser
+  blocks it without a server-side trace. `/` and `/health` answer HEAD as well
+  as GET, since uptime checks probe with HEAD and a 405 reads as down.
+- **Only `styles.css` and `app.js` carry `?v={{ asset_v }}`**, a token derived
+  from the newest mtime under `static/`. Without it the browser keeps its cached
+  CSS and JS, so a deploy ships new markup against old styles — which is exactly
+  what happened during the redesign and looked like the CSS being broken. The
+  token is recomputed at most every `ASSET_VERSION_TTL` (2 s): cached for the
+  process lifetime it went stale under `uvicorn --reload`, which only watches
+  `*.py`. Everything else under `/static` (the ES modules `app.js` imports and
+  the capture worklet) has an unversioned URL, so `StaticCacheMiddleware` sends
+  `Cache-Control: no-cache` and the browser revalidates (a cheap 304) instead of
+  reusing a stale copy for days. A new `<link>` or `<script>` in the template
+  needs `?v=` too.
 - **The status chip tells the truth about whether it can run.** `restIdle()` is
   the single place that decides between green "Ready" and red "Needs keys", and
   every path back to rest goes through it. Do not call `setState('idle', ...)`
   directly from a handler — that is how it ended up claiming Ready with no keys.
+  `restIdle()` is a no-op while `starting` is set, because a start owns the chip
+  until it ends.
+- **A start is cancellable, and cancelling is decided on state, not on the
+  chip.** `generation` is bumped by every start and every stop; a start that
+  wakes from an await and finds it changed was cancelled and must put down what
+  it made without touching state a newer session now owns. `starting` is true
+  for the whole connect, retries and microphone prompt included, and the mic
+  button reads "Cancel" while it is. Other handlers (Clear, saving keys) call
+  `restIdle()` in the middle of a start, which is why Cancel cannot key off the
+  chip's text. Both audio contexts are created before the first `await`, inside
+  the click gesture; Safari and iOS refuse them otherwise.
+- **Connecting retries network failures for 60 s.** Render's edge answers a
+  sleeping container with an immediate 404, so the upgrade fails fast, over and
+  over, for 30-60 s. `retryWithin` (`CONNECT_RETRY_DELAY_MS` 3 s,
+  `CONNECT_BUDGET_MS` 60 s) retries only errors marked `network`
+  (`shouldRetryConnect`): never a server `error` frame, which says the same
+  thing every time, and never by matching the message text. Fatal errors land in
+  a persistent banner, not a toast: Retry, or Open Keys when the code is `keys`.
+- **`PlaybackGate` is the single place that decides speaking has ended.** Two
+  inputs arrive in either order: the server's `speech_done` (in the same burst
+  as the last audio frame, before it has decoded) and the player running dry. It
+  settles only when both have happened; the player's idle signal alone fires in
+  every gap between chunks of one reply. `SpeechPlayer.enqueue` serialises
+  decoding and `playing` includes `pending`, so a chunk still decoding counts as
+  playing. "Stop speaking" sets `muteReply` and drops the rest of the turn on the
+  client; the protocol has no message for it, and the next utterance replaces the
+  turn anyway.
 - **The live caption reserves its space** (`.live { min-height }`) and is never
   hidden. Toggling it shoved the whole page down the moment Meraki started
   speaking and back up when it stopped.
@@ -137,10 +252,13 @@ use with `preview_start`.
   `_pump_events` and reports both a crash and an unexpected `closed` as a fatal
   frame. Without that the socket stays open, the browser keeps streaming audio,
   and the UI sits on "Listening" forever.
-- **The page itself never scrolls.** `body` is a five-row grid at `100dvh` with
-  the conversation on `minmax(0, 1fr)`; that row plus `min-height: 0` on `.log`
-  is what lets the transcript shrink and scroll internally while the mic stays
-  on screen. Get the row count wrong and the `1fr` lands on the stage instead.
+- **The page does not scroll, down to a point.** `body` is a five-row grid at
+  `100dvh` with the conversation on `minmax(0, 1fr)`; that row plus
+  `min-height: 0` on `.log` is what lets the transcript shrink and scroll
+  internally while the mic stays on screen. Get the row count wrong and the
+  `1fr` lands on the stage instead. On short viewports the headline is hidden at
+  `max-height: 680px` to leave the transcript room, and at `max-height: 560px`
+  the grid is released and the page scrolls, with a 220px minimum log.
 - Use `textContent`, not `innerHTML`, for anything model- or user-derived.
 
 ## 6. What the rewrite fixed
@@ -203,10 +321,12 @@ The original was a single 590-line `app.py` plus one 390-line HTML file. Audited
 - **Murf's stream endpoint, not generate.** Measured on identical text: generate
   2865ms to return anything, stream 150-280ms to first byte. Falcon 2 is Murf's
   current TTS model and exists only on the stream endpoint - generate rejects it
-  and accepts only the deprecated GEN2. 24 kHz Inline audio removes a second round trip
-  per chunk; 24 kHz halves the bytes and speech does not need the headroom.
-  `Conversational` style is what makes it sound friendly - more than the voice
-  choice does - and an unsupported style is dropped and retried, once, cached.
+  and accepts only the deprecated GEN2. Each chunk's MP3 is read to completion
+  from the stream, base64-encoded by `synthesize` and sent as one `audio` frame;
+  24 kHz mono halves the bytes against the 44.1 kHz default and speech does not
+  need the headroom. `Conversational` style is what makes it sound friendly -
+  more than the voice choice does - and an unsupported style is dropped and
+  retried, once, remembered per `(voice, model)`.
 - **No news/weather/tool APIs.** Every remaining key is load-bearing. Optional
   integrations were the source of the worst prompt bug in the original.
 - **Spider-Man-flavoured persona, kept at the user's request.** The prompt names
@@ -217,7 +337,9 @@ The original was a single 590-line `app.py` plus one 390-line HTML file. Audited
 
 ## 8. Verified against live APIs (2026-09-07)
 
-Not inferred - actually run:
+Not inferred - actually run, against the code as it was on that date. The
+2026-10-02 branch changed how chunks are delivered, the echo filter and the
+dependencies, and none of this has been re-measured live since.
 
 - Deepgram transcribed a 3.3s sample word-perfect, and `speech_final` fires once
   trailing silence arrives. Without trailing silence it never fires, and since a
@@ -229,20 +351,67 @@ Not inferred - actually run:
   `/v1/speech/generate` on identical text.
 - A full `TurnPipeline` run: 0.6s to first token, 3.2s to first audio.
 
-## 8. Open items
+## 9. Open items
 
 - Murf's stream endpoint is consumed to completion per chunk. Forwarding its
   bytes to the browser as they arrive (PCM rather than MP3) would shave a few
   hundred ms more, at roughly 12x the bandwidth.
 - History is in memory only; a restart loses it. Fine for a demo, needs Redis or
   similar for anything real.
-- No echo cancellation beyond the browser's `echoCancellation: true`. On
-  speakers at volume, barge-in can still self-trigger.
-- No rate limiting or CORS policy on the public deployment.
+- **Nothing on the 2026-10-02 branch has run against a real microphone and live
+  keys.** The suites and a local boot pass; barge-in, the playback gate and the
+  cold-start retry want a hands-on test, and so does a live `wss://` check on
+  Render.
+- **Render must be checked live for the Host header.** The Origin check
+  compares the Origin's host to the `Host` header; if Render's proxy rewrites
+  it, every browser connection is refused with 1008.
+- The dependency bump (fastapi 0.142.2, starlette 1.7.0, uvicorn 0.54.0,
+  aiohttp 3.14.3) is a major Starlette jump verified by both suites and a local
+  boot only. `httpx2`, which `requirements-dev.txt` installs because Starlette's
+  `TestClient` names it, has unconfirmed PyPI ownership; `pytest` and `httpx2`
+  are unpinned. Dev-only.
+- No echo cancellation beyond the browser's `echoCancellation: true` and the
+  text filter. On speakers at volume, barge-in can still self-trigger when the
+  transcript of the echo is not a contiguous run of the spoken words. A
+  one-word echo *final* is not filtered (the 2-word floor lets a lone "no" or
+  "yes" through) and so starts a turn.
+- History records the text the model generated, not the text that was heard. An
+  interrupted reply is stored up to the moment of cancel, which can be well
+  ahead of what the browser had actually played.
+- LLM output is not stripped of markdown before TTS. The persona prompt forbids
+  it; nothing enforces it, so a stray asterisk is read aloud.
+- Ollama and Murf key rejections arrive as non-fatal `llm` / `tts` errors, so
+  the browser shows a toast with no Open Keys action. Only a Deepgram rejection
+  is reported as code `keys`.
+- `app.js` is ~880 lines. `connect`, `startRecording` and `stopRecording` (the
+  generation / `starting` logic) have no unit tests; only the pure helpers in
+  `support.js` and `PlaybackGate` do. The key dialog is the obvious piece to
+  split out.
+- A 500 from an unhandled exception is produced by Starlette's outermost
+  `ServerErrorMiddleware`, outside ours, so it carries no security headers.
+- The CSP's `connect-src` allows `ws:` and `wss:` to any host, wider than the one
+  host the page needs.
+- No rate limiting on the public deployment. The Origin check protects
+  browsers only; a script with no Origin header can open `/ws`.
 - `looks_like_echo` lives in `main.py`; if that file grows it wants its own home.
 
-## 9. Changelog
+## 10. Changelog
 
+- **2026-10-02** — Hardening and UI branch, v3.1.0. Backend tests 76 → 136
+  and browser-logic tests 21 → 96 (232 in all). Voice: TTS chunks are
+  delivered as they finish instead of waiting on the text stream; the style
+  fallback is per `(voice, model)` and needs a 400 that mentions `style`; the
+  echo filter matches whole words, needs two, and expires; `interrupted` covers
+  audio still playing after the turn task ended; the client cuts playback itself
+  on barge-in; `PlaybackGate` settles "Speaking" in one place; start/stop is
+  race-free and Cancel works during a cold-start retry. Hardening: handshake
+  validation with typed errors, session-id rule (no `"anonymous"`), Origin
+  allow-list (`MERAKI_ALLOWED_ORIGINS`), `--ws-max-size`, connector limit and
+  connect timeouts, CSP and other security headers, `no-cache` on `/static`,
+  HEAD routes, asset token with a 2 s TTL, Deepgram rejection as code `keys`.
+  UI: contrast, focus, live regions, short-viewport layout, guided key dialog,
+  persistent error banner with Retry / Open Keys. Dependencies bumped; version
+  now has one source. Docs reconciled with all of it.
 - **2026-09-07** — Deployed. Verified live over `wss://`: keyless handshake,
   bogus-key rejection and malformed-frame handling all correct, ~1.1s round trip.
 
@@ -273,7 +442,7 @@ Not inferred - actually run:
   speakers. Removed the unused mic-mute plumbing that approach made redundant.
 - **2026-09-07** — Keys moved to the environment; settings dialog and all
   client-side key handling removed while developing. BYO to return before
-  hosting.
+  hosting (it did, in the entry above).
 - **2026-09-06** — Locked model and voice server-side (pickers removed). Murf
   now returns inline base64 at 24 kHz with the Conversational style, cutting a
   round trip per chunk. Fixed a hang where a pre-`ready` fatal error left the

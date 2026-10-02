@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from . import __version__
+
 try:  # optional: local dev convenience
     from dotenv import load_dotenv
 
@@ -14,7 +16,8 @@ except ImportError:  # pragma: no cover - dotenv is optional in production
 
 
 APP_NAME = "Meraki"
-APP_VERSION = "3.0.0"
+# One source: meraki/__init__.py. Imported rather than copied so it cannot drift.
+APP_VERSION = __version__
 
 # --- Upstream services -------------------------------------------------------
 
