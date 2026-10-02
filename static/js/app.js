@@ -2,13 +2,15 @@ import { MicCapture } from './audio-capture.js';
 import { SpeechPlayer } from './audio-player.js';
 import { PlaybackGate } from './playback-gate.js';
 import {
+  CONNECT_BUDGET_MS,
+  CONNECT_RETRY_DELAY_MS,
   describeStartError,
   detectSupport,
   isValidSessionId,
   makeSessionId,
   networkError,
   pickKeys,
-  retryOnce,
+  retryWithin,
   shouldRetryConnect,
   withTimeout,
 } from './support.js';
@@ -24,9 +26,6 @@ const KEYS_REQUIRED = document.body.dataset.keysRequired !== 'false';
 // A connect that is still waiting after this long is almost certainly a sleeping
 // free-tier server booting, so say so instead of sitting on "Connecting".
 const COLD_START_MS = 5000;
-// A network failure is retried once after this pause; the server is usually up
-// by then if it was only waking.
-const RETRY_DELAY_MS = 2000;
 const CONNECT_TIMEOUT_MS = 20000;
 
 const el = (id) => document.getElementById(id);
@@ -80,6 +79,9 @@ let supportReason = '';
 // pressed, so the rest of its audio and caption would arrive and play right
 // back; this drops them until the next turn starts.
 let muteReply = false;
+// The connect attempt a start is currently making, hoisted so a Cancel (which
+// runs stopRecording, not the start's own finally) can close its socket at once.
+let pendingAttempt = null;
 
 // --- session -----------------------------------------------------------------
 
@@ -165,9 +167,15 @@ function setState(state, label, { opensKeys = false } = {}) {
   if (opensKeys) {
     ui.chip.tabIndex = 0;
     ui.chip.setAttribute('role', 'button');
+    // The visible text is only a status; this says what pressing it does.
+    ui.chip.setAttribute('aria-label', 'Needs keys: open key settings');
   } else {
+    // Saving keys from the dialog hands focus back to the chip; taking away its
+    // tabindex while it holds focus would drop focus onto <body>.
+    if (document.activeElement === ui.chip) ui.micBtn.focus();
     ui.chip.removeAttribute('tabindex');
     ui.chip.removeAttribute('role');
+    ui.chip.removeAttribute('aria-label');
   }
 }
 
@@ -217,6 +225,15 @@ function hideBanner() {
   ui.banner.hidden = true;
   ui.bannerText.textContent = '';
   bannerAction = null;
+}
+
+/**
+ * A failure that ends the conversation. The banner is the lasting copy, so it
+ * is not also a toast (a screen reader would hear it twice). A rejected key
+ * gets "Open Keys": retrying with the same key can only fail the same way.
+ */
+function showFailure(message, code) {
+  showBanner(message, code === 'keys' ? { openKeys: true } : { retry: true });
 }
 
 function addTurn(role, content) {
@@ -374,7 +391,7 @@ function connect(attempt) {
       if (message.type === 'error' && !settled) {
         // Surfaced by startRecording's catch; don't double-toast it here.
         // Not a network failure, so not retried: it will say the same again.
-        failed(new Error(message.message));
+        failed(Object.assign(new Error(message.message), { code: message.code }));
         return;
       }
       handleMessage(message);
@@ -391,8 +408,7 @@ function connect(attempt) {
       socket = null;
       if (recording) {
         stopRecording({ silent: true });
-        toast('Connection lost.', 'error');
-        showBanner('Connection lost.', { retry: true });
+        showFailure('Connection lost.');
       }
     };
   });
@@ -472,9 +488,9 @@ function handleMessage(message) {
       break;
 
     case 'error':
-      toast(message.message, 'error');
+      if (!message.fatal) toast(message.message, 'error');
       if (message.fatal) {
-        showBanner(message.message, { retry: true });
+        showFailure(message.message, message.code);
         gate.cancel();
         stopRecording({ silent: true });
       } else if (gate.turnOpen) {
@@ -506,19 +522,26 @@ async function startRecording() {
   const mine = ++generation;
   const cancelled = () => mine !== generation;
   const attempt = { ws: null };
+  pendingAttempt = attempt;
   let capture = null;
   muteReply = false;
 
+  // Connecting can take a minute on a cold start, so the button stays live and
+  // turns into Cancel (toggleRecording) rather than being a dead end.
   setState('connecting', 'Connecting');
-  ui.micBtn.disabled = true;
+  ui.micBtn.dataset.active = 'true';
+  ui.micLabel.textContent = 'Cancel';
 
-  // Armed for the connect only. The microphone prompt that follows can take as
-  // long as the visitor likes, and that is not the server waking up.
-  const slowTimer = setTimeout(() => {
+  const showWaking = () => {
     if (cancelled() || uiState !== 'connecting') return;
     setState('connecting', 'Waking the server…');
     ui.hint.textContent = 'A sleeping free server can take up to a minute.';
-  }, COLD_START_MS);
+  };
+  // Two ways to know: a connect that hangs (this timer), and one that is
+  // refused at once, which is what a booting Render container does (onRetry).
+  // Armed for the connect only; the microphone prompt that follows can take as
+  // long as the visitor likes, and that is not the server waking up.
+  const slowTimer = setTimeout(showWaking, COLD_START_MS);
 
   try {
     player = player || new SpeechPlayer({
@@ -552,9 +575,9 @@ async function startRecording() {
     await Promise.all([player.ensureContext(), capture.prepare()]);
     if (cancelled()) return;
 
-    const ws = await retryOnce(
-      () => {
-        // The first try's socket may still be open (a timeout does not close it).
+    const ws = await retryWithin({
+      attempt: () => {
+        // The previous try's socket may still be open (a timeout does not close it).
         if (attempt.ws) closeQuietly(attempt.ws);
         return withTimeout(
           connect(attempt),
@@ -563,8 +586,12 @@ async function startRecording() {
           networkError
         );
       },
-      { shouldRetry: shouldRetryConnect, delayMs: RETRY_DELAY_MS, cancelled }
-    );
+      shouldRetry: shouldRetryConnect,
+      delayMs: CONNECT_RETRY_DELAY_MS,
+      budgetMs: CONNECT_BUDGET_MS,
+      cancelled,
+      onRetry: showWaking,
+    });
     clearTimeout(slowTimer);
     if (cancelled()) return;
     // Connected. If the slow notice went up, take it down for the mic prompt.
@@ -583,10 +610,9 @@ async function startRecording() {
     ui.micLabel.textContent = 'Stop';
     setState('listening', 'Listening');
   } catch (error) {
+    // A cancelled start says nothing: the visitor asked for it to stop.
     if (!cancelled()) {
-      const message = describeStartError(error);
-      toast(message, 'error');
-      showBanner(message, { retry: true });
+      showFailure(describeStartError(error), error?.code);
       await stopRecording({ silent: true });
     }
   } finally {
@@ -595,11 +621,8 @@ async function startRecording() {
     // cancelled start) is ours to close; the live one is stopRecording's. The
     // same goes for a mic that a stop never got to see.
     if (attempt.ws && attempt.ws !== socket) closeQuietly(attempt.ws);
-    if (cancelled()) {
-      if (capture && capture !== mic) capture.stop();
-    } else {
-      ui.micBtn.disabled = false;
-    }
+    if (cancelled() && capture && capture !== mic) capture.stop();
+    if (pendingAttempt === attempt) pendingAttempt = null;
   }
 }
 
@@ -617,6 +640,10 @@ async function stopRecording({ silent = false } = {}) {
   const closing = socket;
   mic = null;
   socket = null;
+  // A Cancel during the connect: the start is still waiting on this socket (or
+  // on the pause before its next try), and should not wait for the timeout.
+  if (pendingAttempt?.ws && pendingAttempt.ws !== closing) closeQuietly(pendingAttempt.ws);
+  pendingAttempt = null;
 
   if (closing && closing.readyState === WebSocket.OPEN) {
     closing.send('stop');
@@ -634,6 +661,9 @@ async function stopRecording({ silent = false } = {}) {
 
 function toggleRecording() {
   if (recording) stopRecording();
+  // Still connecting: the button says Cancel. Bumping the generation (inside
+  // stopRecording) is what makes the in-flight start and its retries give up.
+  else if (uiState === 'connecting') stopRecording({ silent: true });
   else startRecording();
 }
 
@@ -732,6 +762,8 @@ function submitSettings(event) {
 
   if (!saveKeys(keys)) return;
   ui.settings.close();
+  // `close` fires a task later; the toast below must not land in a hidden dialog.
+  document.body.append(ui.toasts);
   if (!recording) restIdle();
   // The keys it was asking for are in; the banner would be stale.
   if (bannerAction === 'keys' && !missingKeys().length) hideBanner();
@@ -815,9 +847,9 @@ document.addEventListener('keydown', (event) => {
   event.preventDefault();
   // Holding the key repeats keydown; each repeat would toggle the session.
   if (event.repeat) return;
-  // A click on a disabled button is swallowed by the browser; this path is not,
-  // so without the check a second press during "Connecting" would start a
-  // second session and orphan the first microphone stream and socket.
+  // A click on a disabled button (the unsupported case) is swallowed by the
+  // browser; this path is not. A press during "Connecting" is a Cancel, which
+  // toggleRecording handles, so it cannot start a second session.
   if (ui.micBtn.disabled) return;
   toggleRecording();
 });

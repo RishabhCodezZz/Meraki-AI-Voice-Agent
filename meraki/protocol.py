@@ -11,7 +11,9 @@ Client -> server
 The handshake is validated, and every failure is a typed fatal ``error`` frame
 followed by a close - never a traceback: a first frame that is binary, not JSON,
 not an object, not ``config``, or late (15s) is code ``handshake``; no usable
-keys is code ``keys``. ``keys`` that is not an object counts as no keys.
+keys is code ``keys``, and so is a Deepgram key that Deepgram refused (401/403) -
+the browser answers ``keys`` with "Open Keys" rather than "Retry". Any other
+Deepgram failure at connect time is ``stt``. ``keys`` that is not an object counts as no keys.
 ``session_id`` is kept only if it matches ``[A-Za-z0-9_-]{8,64}`` (so a reload
 resumes the conversation); anything else, or nothing, gets a fresh server-side
 id. There is no shared fallback id. The upgrade itself is refused (close 1008)

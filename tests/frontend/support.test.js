@@ -16,7 +16,9 @@ import {
   pickKeys,
   networkError,
   shouldRetryConnect,
-  retryOnce,
+  retryWithin,
+  CONNECT_RETRY_DELAY_MS,
+  CONNECT_BUDGET_MS,
 } from '../../static/js/support.js';
 
 /** An environment that has everything; tests knock items out of it. */
@@ -253,86 +255,168 @@ test('withTimeout can reject with an error the caller built', async (t) => {
   assert.equal(shouldRetryConnect(error), true, 'a timeout is a network failure');
 });
 
-// --- retryOnce ---------------------------------------------------------------
+// --- retryWithin -------------------------------------------------------------
 
-/** A `run` that fails with the given errors in order, then succeeds. */
-function flaky(...errors) {
-  const calls = { n: 0 };
-  const run = async () => {
-    calls.n += 1;
-    if (errors.length) throw errors.shift();
-    return 'connected';
+/**
+ * A clock the test owns: `sleep` moves it forward instead of waiting, so the
+ * arithmetic of a 60 s budget runs instantly. `took` lets an attempt spend time.
+ */
+function fakeClock() {
+  const clock = {
+    t: 0,
+    sleeps: [],
+    now: () => clock.t,
+    sleep: async (ms) => {
+      clock.sleeps.push(ms);
+      clock.t += ms;
+    },
   };
-  return { run, calls };
+  return clock;
 }
 
-test('retryOnce returns the first result without waiting when nothing fails', async () => {
-  const { run, calls } = flaky();
-  const waits = [];
-  const result = await retryOnce(run, {
-    shouldRetry: () => true, delayMs: 2000, wait: (ms) => waits.push(ms),
-  });
-  assert.equal(result, 'connected');
-  assert.equal(calls.n, 1);
-  assert.deepEqual(waits, []);
+/** An `attempt` that fails with `fail(n)` for the first `failures` calls. */
+function attempts({ failures = Infinity, fail = (n) => networkError(`down #${n}`), took = 0, clock }) {
+  const state = { n: 0 };
+  state.run = async () => {
+    state.n += 1;
+    // A retry loop that ignores its budget must fail the test, not hang it.
+    if (state.n > 1000) throw new Error('runaway retry loop');
+    if (clock) clock.t += took;
+    if (state.n <= failures) throw fail(state.n);
+    return 'connected';
+  };
+  return state;
+}
+
+const policy = (clock, extra = {}) => ({
+  shouldRetry: shouldRetryConnect,
+  delayMs: CONNECT_RETRY_DELAY_MS,
+  budgetMs: CONNECT_BUDGET_MS,
+  sleep: clock.sleep,
+  now: clock.now,
+  ...extra,
 });
 
-test('retryOnce waits the delay and tries once more after a retryable failure', async () => {
-  const { run, calls } = flaky(networkError('down'));
-  const waits = [];
+test('the retry policy is every 3 s for a 60 s budget', () => {
+  assert.equal(CONNECT_RETRY_DELAY_MS, 3000);
+  assert.equal(CONNECT_BUDGET_MS, 60000);
+});
+
+test('retryWithin returns the first result without waiting when nothing fails', async () => {
+  const clock = fakeClock();
+  const a = attempts({ failures: 0 });
   const retried = [];
-  const result = await retryOnce(run, {
-    shouldRetry: shouldRetryConnect,
-    delayMs: 2000,
-    wait: async (ms) => { waits.push(ms); },
-    onRetry: (error) => retried.push(error.message),
+  const result = await retryWithin({
+    attempt: a.run, ...policy(clock), onRetry: (e) => retried.push(e.message),
   });
   assert.equal(result, 'connected');
-  assert.equal(calls.n, 2);
-  assert.deepEqual(waits, [2000]);
-  assert.deepEqual(retried, ['down']);
+  assert.equal(a.n, 1);
+  assert.deepEqual(clock.sleeps, []);
+  assert.deepEqual(retried, []);
 });
 
-test('retryOnce gives up after one retry and surfaces the second failure', async () => {
-  const { run, calls } = flaky(networkError('first'), networkError('second'));
-  await assert.rejects(
-    retryOnce(run, { shouldRetry: shouldRetryConnect, delayMs: 0, wait: async () => {} }),
-    { message: 'second' }
-  );
-  assert.equal(calls.n, 2, 'never a third attempt');
+test('retryWithin keeps retrying a network failure until one attempt succeeds', async () => {
+  const clock = fakeClock();
+  const a = attempts({ failures: 5 });
+  const result = await retryWithin({ attempt: a.run, ...policy(clock) });
+  assert.equal(result, 'connected');
+  assert.equal(a.n, 6);
+  assert.deepEqual(clock.sleeps, [3000, 3000, 3000, 3000, 3000]);
 });
 
-test('retryOnce does not retry a failure the policy rejects', async () => {
-  const { run, calls } = flaky(new Error('bad key'));
-  await assert.rejects(
-    retryOnce(run, { shouldRetry: shouldRetryConnect, delayMs: 0, wait: async () => {} }),
-    { message: 'bad key' }
-  );
-  assert.equal(calls.n, 1);
+test('retryWithin tells the caller about each retry before it waits', async () => {
+  // This is how the page can say "Waking the server" at the first failure
+  // rather than after the first pause.
+  const clock = fakeClock();
+  const a = attempts({ failures: 2 });
+  const order = [];
+  const sleep = async (ms) => { order.push('sleep'); await clock.sleep(ms); };
+  await retryWithin({
+    attempt: a.run, ...policy(clock), sleep, onRetry: (e) => order.push(e.message),
+  });
+  assert.deepEqual(order, ['down #1', 'sleep', 'down #2', 'sleep']);
 });
 
-test('retryOnce does not retry, or keep waiting, once the caller has cancelled', async () => {
-  // Cancelled before the failure is even looked at.
-  const first = flaky(networkError('down'));
-  await assert.rejects(
-    retryOnce(first.run, {
-      shouldRetry: shouldRetryConnect, delayMs: 0, wait: async () => {}, cancelled: () => true,
-    }),
-    { message: 'down' }
-  );
-  assert.equal(first.calls.n, 1);
+test('retryWithin stops at the budget and surfaces the last failure', async () => {
+  const clock = fakeClock();
+  const a = attempts({});
+  await assert.rejects(retryWithin({ attempt: a.run, ...policy(clock) }), { message: 'down #20' });
+  // Attempts at 0, 3, ..., 57 s. A 21st would start at 60 s, which is past it.
+  assert.equal(a.n, 20);
+  assert.equal(clock.sleeps.length, 19);
+  assert.equal(clock.t, 57000);
+});
 
-  // Cancelled while the delay was running: the retry must not start.
+test('retryWithin counts the time an attempt itself takes against the budget', async () => {
+  // Each try hangs for 20 s (the connect timeout) before failing: 0-20, wait,
+  // 23-43, wait, 46-66, and 66 + 3 is well past the budget.
+  const clock = fakeClock();
+  const a = attempts({ took: 20000, clock });
+  await assert.rejects(retryWithin({ attempt: a.run, ...policy(clock) }), { message: 'down #3' });
+  assert.equal(a.n, 3);
+  assert.equal(clock.t, 66000);
+});
+
+test('retryWithin does not start a retry that would begin at or after the budget', async () => {
+  const clock = fakeClock();
+  const a = attempts({});
+  await assert.rejects(
+    retryWithin({ attempt: a.run, ...policy(clock, { budgetMs: 6000 }) }),
+    { message: 'down #2' }
+  );
+  assert.equal(a.n, 2, 'attempts at 0 and 3 s run; the one that would start at 6 s does not');
+});
+
+test('retryWithin never retries a failure that is not a network failure', async () => {
+  const clock = fakeClock();
+  const a = attempts({ fail: () => new Error('Deepgram rejected that API key.') });
+  await assert.rejects(
+    retryWithin({ attempt: a.run, ...policy(clock) }),
+    { message: 'Deepgram rejected that API key.' }
+  );
+  assert.equal(a.n, 1);
+  assert.deepEqual(clock.sleeps, []);
+
+  // Also not after a network failure was already retried once.
+  const mixed = attempts({ fail: (n) => (n === 1 ? networkError('down') : new Error('bad key')) });
+  await assert.rejects(retryWithin({ attempt: mixed.run, ...policy(clock) }), { message: 'bad key' });
+  assert.equal(mixed.n, 2);
+});
+
+test('retryWithin does not retry when the caller cancelled before the failure landed', async () => {
+  const clock = fakeClock();
+  const a = attempts({});
+  await assert.rejects(
+    retryWithin({ attempt: a.run, ...policy(clock, { cancelled: () => true }) }),
+    { message: 'down #1' }
+  );
+  assert.equal(a.n, 1);
+  assert.deepEqual(clock.sleeps, []);
+});
+
+test('retryWithin does not attempt again when cancelled during the delay', async () => {
+  const clock = fakeClock();
+  const a = attempts({});
   let cancelled = false;
-  const second = flaky(networkError('down'));
+  const sleep = async (ms) => { await clock.sleep(ms); cancelled = true; };
   await assert.rejects(
-    retryOnce(second.run, {
-      shouldRetry: shouldRetryConnect,
-      delayMs: 2000,
-      wait: async () => { cancelled = true; },
-      cancelled: () => cancelled,
-    }),
-    { message: 'down' }
+    retryWithin({ attempt: a.run, ...policy(clock, { sleep, cancelled: () => cancelled }) }),
+    { message: 'down #1' }
   );
-  assert.equal(second.calls.n, 1, 'a stop pressed during the delay ends the start');
+  assert.equal(a.n, 1, 'a Cancel pressed while waiting must not open another socket');
+});
+
+test('retryWithin stops between later attempts too', async () => {
+  const clock = fakeClock();
+  const a = attempts({});
+  let cancelled = false;
+  const sleep = async (ms) => {
+    await clock.sleep(ms);
+    if (clock.sleeps.length === 3) cancelled = true;
+  };
+  await assert.rejects(
+    retryWithin({ attempt: a.run, ...policy(clock, { sleep, cancelled: () => cancelled }) }),
+    { message: 'down #3' }
+  );
+  assert.equal(a.n, 3);
 });

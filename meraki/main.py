@@ -269,7 +269,8 @@ class _Connection:
         try:
             await self._speech.start()
         except SpeechError as exc:
-            await self._send(protocol.error("stt", str(exc), fatal=True))
+            code = "keys" if exc.auth_rejected else "stt"
+            await self._send(protocol.error(code, str(exc), fatal=True))
             return
 
         self._pump = asyncio.create_task(self._drain_speech_events())

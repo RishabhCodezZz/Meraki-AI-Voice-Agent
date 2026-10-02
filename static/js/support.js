@@ -81,30 +81,46 @@ export function shouldRetryConnect(error) {
   return error instanceof Error && error.network === true;
 }
 
+// Render's free tier answers a request for a sleeping container with an
+// immediate 404 and keeps doing so for 30-60 s while it boots, so a WebSocket
+// upgrade fails fast, over and over. Retrying every few seconds for about a
+// minute is what turns that into "Waking the server" and then a connection.
+export const CONNECT_RETRY_DELAY_MS = 3000;
+export const CONNECT_BUDGET_MS = 60000;
+
 /**
- * Run `run`; if it fails and `shouldRetry` says so, wait `delayMs` and run it
- * one more time. `cancelled` is checked after the failure and again after the
- * wait, because a stop pressed during the delay must end the start, not begin
- * another connection. The original failure is what a cancelled call rejects with.
+ * Keep calling `attempt` while it fails in a way `shouldRetry` accepts, pausing
+ * `delayMs` between tries, until `budgetMs` has passed since the first try
+ * began. The time an attempt itself takes counts, and no retry is started that
+ * would begin at or after the budget. `onRetry(error)` fires as soon as a retry
+ * is decided, before the pause, so the caller can show it at the first failure.
+ *
+ * `cancelled` is checked once a failure lands and again after each pause, so a
+ * Cancel pressed while waiting never opens another connection. Whatever stops
+ * the loop (budget, policy, cancel) rejects with the failure that caused it.
+ * `sleep` and `now` can be replaced so tests need not wait.
  */
-export async function retryOnce(
-  run,
-  {
-    shouldRetry,
-    delayMs,
-    cancelled = () => false,
-    onRetry = () => {},
-    wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  }
-) {
-  try {
-    return await run();
-  } catch (error) {
-    if (cancelled() || !shouldRetry(error)) throw error;
-    await wait(delayMs);
-    if (cancelled()) throw error;
-    onRetry(error);
-    return run();
+export async function retryWithin({
+  attempt,
+  shouldRetry,
+  delayMs,
+  budgetMs,
+  cancelled = () => false,
+  onRetry = () => {},
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  now = () => Date.now(),
+}) {
+  const started = now();
+  for (;;) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (cancelled() || !shouldRetry(error)) throw error;
+      if (now() - started + delayMs >= budgetMs) throw error;
+      onRetry(error);
+      await sleep(delayMs);
+      if (cancelled()) throw error;
+    }
   }
 }
 

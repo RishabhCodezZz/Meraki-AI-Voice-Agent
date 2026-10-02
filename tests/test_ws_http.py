@@ -332,3 +332,62 @@ def test_keys_flag_is_a_body_data_attribute(client, monkeypatch):
 @pytest.mark.parametrize("payload", ["abc", ["x"], 7, None])
 def test_api_keys_tolerate_a_non_dict_payload(payload):
     assert ApiKeys.from_payload(payload).missing() == ["Deepgram", "Ollama", "Murf"]
+
+
+# --- Deepgram failures as typed frames ---------------------------------------
+
+
+def _fail_deepgram_with(monkeypatch, error):
+    for name in ("DEEPGRAM_API_KEY", "OLLAMA_API_KEY", "MURF_API_KEY"):
+        monkeypatch.setenv(name, "test-key")
+
+    async def fail(self):
+        raise error
+
+    monkeypatch.setattr(main.SpeechStream, "start", fail)
+
+
+def test_a_rejected_deepgram_key_is_reported_as_a_keys_error(client, monkeypatch):
+    # The browser sends "Open Keys" for code `keys` and "Retry" for anything
+    # else, and a rejected key is the case where retrying cannot help.
+    _fail_deepgram_with(monkeypatch, SpeechError("Deepgram rejected that API key.", auth_rejected=True))
+
+    reply = _handshake(client, {"type": "config"})
+
+    assert (reply["type"], reply["code"], reply["fatal"]) == ("error", "keys", True)
+    assert reply["message"] == "Deepgram rejected that API key."
+
+
+def test_any_other_deepgram_failure_stays_an_stt_error(client, monkeypatch):
+    _fail_deepgram_with(monkeypatch, SpeechError("Could not reach Deepgram."))
+
+    reply = _handshake(client, {"type": "config"})
+
+    assert (reply["type"], reply["code"], reply["fatal"]) == ("error", "stt", True)
+
+
+def test_speech_error_defaults_to_not_an_auth_rejection():
+    assert SpeechError("x").auth_rejected is False
+    assert SpeechError("x", auth_rejected=True).auth_rejected is True
+
+
+@pytest.mark.parametrize(
+    "status, rejected", [(401, True), (403, True), (500, False)]
+)
+def test_only_a_401_or_403_from_deepgram_marks_the_key_as_rejected(status, rejected):
+    import asyncio
+    from types import SimpleNamespace
+
+    import aiohttp
+
+    class Http:
+        async def ws_connect(self, *args, **kwargs):
+            raise aiohttp.WSServerHandshakeError(
+                SimpleNamespace(real_url="wss://x"), (), status=status
+            )
+
+    stream = main.SpeechStream(Http(), "k")
+    with pytest.raises(SpeechError) as caught:
+        asyncio.run(stream.start())
+
+    assert caught.value.auth_rejected is rejected
