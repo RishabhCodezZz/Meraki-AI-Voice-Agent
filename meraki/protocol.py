@@ -8,6 +8,17 @@ Client -> server
     "stop"                            plain text, not JSON: user released the mic
     <binary>                          PCM16 mono @16kHz
 
+The handshake is validated, and every failure is a typed fatal ``error`` frame
+followed by a close - never a traceback: a first frame that is binary, not JSON,
+not an object, not ``config``, or late (15s) is code ``handshake``; no usable
+keys is code ``keys``, and so is a Deepgram key that Deepgram refused (401/403) -
+the browser answers ``keys`` with "Open Keys" rather than "Retry". Any other
+Deepgram failure at connect time is ``stt``. ``keys`` that is not an object counts as no keys.
+``session_id`` is kept only if it matches ``[A-Za-z0-9_-]{8,64}`` (so a reload
+resumes the conversation); anything else, or nothing, gets a fresh server-side
+id. There is no shared fallback id. The upgrade itself is refused (close 1008)
+when the browser's Origin is not this host or in ``MERAKI_ALLOWED_ORIGINS``.
+
 Model and voice are server-side settings; anything a client sends for them is
 ignored. Any key it omits falls back to the server's environment.
 
@@ -17,10 +28,14 @@ Server -> client
     {"type": "final",    "text": str}
     {"type": "thinking"}
     {"type": "reply_chunk", "text": str}
-    {"type": "reply_done",  "text": str}
+    {"type": "reply_done",  "text": str}   the whole reply, once; also sent before
+                                      a ``tts`` error, so the text still reaches the
+                                      transcript when only the voice failed
     {"type": "audio", "seq": int, "data": <base64 mp3>}
     {"type": "speech_done"}
-    {"type": "interrupted"}           user barged in; drop queued audio
+    {"type": "interrupted"}           user barged in; drop queued audio. Also sent
+                                      for a turn that has already finished while
+                                      its audio is still playing in the browser
     {"type": "error", "code": str, "message": str, "fatal": bool}
 """
 

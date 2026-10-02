@@ -179,6 +179,50 @@ def test_cancelling_before_any_token_records_no_empty_reply(monkeypatch):
     assert [t.role for t in convo.turns] == ["user"]
 
 
+def test_cancelling_while_an_audio_frame_is_being_sent_closes_the_speech_stream(
+    monkeypatch,
+):
+    """The generator must be closed before the cancel leaves `run`, not later.
+
+    The real stream_speech has a background producer pulling LLM tokens; left
+    open it keeps pulling, and sends a stray reply_chunk after `interrupted`.
+    Asserted inside the running loop because asyncio.run closes leftover async
+    generators itself on the way out, which would hide the leak.
+    """
+    closed = []
+
+    async def stream_speech(http, key, text_stream, voice_id=None):
+        try:
+            yield "QUJD"
+            await asyncio.Event().wait()
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(tts, "stream_speech", stream_speech)
+
+    async def scenario():
+        reached_audio = asyncio.Event()
+
+        async def send(frame):
+            if frame["type"] == "audio":
+                reached_audio.set()
+                await asyncio.Event().wait()  # the websocket is backed up
+
+        pipeline = TurnPipeline(
+            send=send, http=None, keys=KEYS, conversation=Conversation()
+        )
+        turn = asyncio.create_task(pipeline.run("hello"))
+        await asyncio.wait_for(reached_audio.wait(), timeout=2)
+
+        turn.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+
+        assert closed == [True], "speech stream was still open when the turn ended"
+
+    asyncio.run(scenario())
+
+
 # --- failure modes -----------------------------------------------------------
 
 
@@ -202,6 +246,33 @@ def test_a_voice_failure_still_releases_the_ui(monkeypatch):
 
     assert send.of("error")[0]["code"] == "tts"
     assert "speech_done" in send.types()  # the release
+
+
+def test_a_voice_failure_keeps_the_reply_in_the_transcript(monkeypatch):
+    """Without reply_done the text lives only in the live caption and vanishes."""
+    monkeypatch.setattr(llm, "stream_reply", fake_llm(["Here you go. "]))
+    monkeypatch.setattr(tts, "stream_speech", fake_tts(error=tts.TTSError("Murf is down.")))
+
+    send = run_turn(Conversation())
+
+    types = send.types()
+    assert send.of("reply_done")[0]["text"] == "Here you go."
+    assert types.index("reply_done") < types.index("error")
+    assert types[-1] == "speech_done"
+
+
+def test_a_voice_failure_with_no_reply_text_sends_no_reply_done(monkeypatch):
+    async def fails_at_once(http, key, text_stream, voice_id=None):
+        raise tts.TTSError("Murf is down.")
+        yield  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr(llm, "stream_reply", fake_llm([]))
+    monkeypatch.setattr(tts, "stream_speech", fails_at_once)
+
+    send = run_turn(Conversation())
+
+    assert send.of("reply_done") == []
+    assert send.of("error")[0]["code"] == "tts"
 
 
 def test_an_unexpected_crash_does_not_leak_details(monkeypatch):

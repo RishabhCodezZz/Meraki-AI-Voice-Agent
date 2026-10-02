@@ -11,14 +11,17 @@
   --line-soft: #151d22;
   --text: #e8edf0;
   --text-dim: #8b9aa3;
-  --text-faint: #56656e;
+  /* Small text on the dark panels: 5.6:1 on --panel-2, the lowest surface. */
+  --text-faint: #8393a0;
   --accent: #e8434a;
+  /* The accent as text. --accent itself is 4.5:1 on --panel-2, no margin. */
+  --accent-text: #ff6b72;
   --accent-strong: #d1232c;
   --on-accent: #ffffff;
   --accent-soft: rgba(232, 67, 74, 0.13);
   --ok: #3ddc84;
   --ok-soft: rgba(61, 220, 132, 0.16);
-  --bar-idle: #212b31;
+  --bar-idle: #3d4d57;
 
   --radius-lg: 16px;
   --display: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
@@ -29,11 +32,29 @@
 
 * { box-sizing: border-box; }
 
+/* Author display rules (.ghost, .banner...) outrank the browser's [hidden], so
+   without this a "hidden" button still shows. */
+[hidden] { display: none !important; }
+
+/* Text for screen readers only. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 html { height: 100%; }
 
 body {
   margin: 0;
   /* Fixed viewport: the transcript scrolls, the controls never leave. */
+  height: 100vh;
   height: 100dvh;
   overflow: hidden;
   display: grid;
@@ -159,9 +180,13 @@ body[data-state="speaking"]::before { opacity: 1; }
 
 /* Blocked is a state you must act on, so say so in the chip itself. */
 .chip--status[data-state="blocked"] {
-  color: var(--accent);
+  color: var(--accent-text);
   border-color: rgba(232, 67, 74, 0.35);
 }
+
+/* "Needs keys" opens the key dialog; app.js gives it role=button then. */
+.chip--status[role="button"] { cursor: pointer; transition: border-color 160ms ease; }
+.chip--status[role="button"]:hover { border-color: var(--accent); }
 
 @keyframes blink { 50% { opacity: 0.2; } }
 
@@ -184,7 +209,7 @@ body[data-state="speaking"]::before { opacity: 1; }
   font-size: 10.5px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .stage__title {
@@ -203,6 +228,13 @@ body[data-state="speaking"]::before { opacity: 1; }
   width: min(620px, 100%);
   height: 82px;
   display: block;
+}
+
+.noscript {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--accent-text);
 }
 
 /* ---------- live region ---------- */
@@ -246,10 +278,13 @@ body[data-state="speaking"]::before { opacity: 1; }
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  min-height: 48px;
   padding: 13px 26px 13px 21px;
-  border: 1px solid var(--line);
+  /* The primary action: an accent edge and tint at rest, so it is the first
+     thing the eye lands on rather than another grey pill. */
+  border: 1px solid var(--accent-strong);
   border-radius: 999px;
-  background: var(--panel-2);
+  background: var(--accent-soft);
   color: var(--text);
   font-family: var(--display);
   font-size: 14.5px;
@@ -257,7 +292,7 @@ body[data-state="speaking"]::before { opacity: 1; }
   cursor: pointer;
   transition: border-color 200ms ease, background 200ms ease, transform 120ms ease;
 }
-.mic:hover { border-color: #2c3a42; }
+.mic:hover { border-color: var(--accent); }
 .mic:active { transform: scale(0.985); }
 .mic:disabled { opacity: 0.55; cursor: progress; }
 
@@ -266,6 +301,12 @@ body[data-state="speaking"]::before { opacity: 1; }
   border-color: var(--accent-strong);
   color: var(--on-accent);
 }
+
+/* Mic at rest, stop square while a session is live. Both icons are in the
+   markup; the state attribute app.js already sets picks one. */
+.mic__icon--stop { display: none; }
+.mic[data-active="true"] .mic__icon--mic { display: none; }
+.mic[data-active="true"] .mic__icon--stop { display: block; }
 
 .mic__ring {
   position: absolute;
@@ -282,11 +323,53 @@ body[data-state="speaking"]::before { opacity: 1; }
   100% { opacity: 0;   transform: scale(1.14); }
 }
 
+/* The hint and the stop-speaking button share a row. Its height is reserved so
+   the button appearing does not move the page, same as the live caption. */
+.controls__aux {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-height: 28px;
+}
+
 .hint {
   margin: 0;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--text-faint);
+}
+
+/* A failure that outlives its toast: says what happened and offers the way on. */
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  max-width: 660px;
+  width: 100%;
+  padding: 9px 14px;
+  border: 1px solid rgba(232, 67, 74, 0.45);
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.banner__text { overflow-wrap: anywhere; }
+
+/* Keyboard focus. The dark panels swallow the browser default, so draw our own. */
+.mic:focus-visible,
+.ghost:focus-visible,
+.chip--btn:focus-visible,
+.chip--status[role="button"]:focus-visible,
+.primary:focus-visible,
+.field input:focus-visible,
+.field__get:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
 }
 
 /* ---------- conversation ---------- */
@@ -359,7 +442,9 @@ body[data-state="speaking"]::before { opacity: 1; }
   padding: 13px 0;
   border-bottom: 1px solid var(--line-soft);
   text-align: left;
+  animation: turn-in 220ms ease both;
 }
+@keyframes turn-in { from { opacity: 0; transform: translateY(4px); } }
 .turn:last-child { border-bottom: 0; }
 
 .turn__who {
@@ -371,7 +456,7 @@ body[data-state="speaking"]::before { opacity: 1; }
   color: var(--text-faint);
   padding-top: 4px;
 }
-.turn--assistant .turn__who { color: var(--accent); }
+.turn--assistant .turn__who { color: var(--accent-text); }
 
 .turn__body {
   margin: 0;
@@ -391,7 +476,7 @@ body[data-state="speaking"]::before { opacity: 1; }
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 26px 12px;
+  padding: 0 26px calc(12px + env(safe-area-inset-bottom));
   font-family: var(--mono);
   font-size: 10.5px;
   color: var(--text-faint);
@@ -416,6 +501,21 @@ body[data-state="speaking"]::before { opacity: 1; }
   transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
 }
 .ghost:hover { color: var(--text); border-color: #2c3a42; background: var(--panel-2); }
+
+/* Fingers need a bigger target than pointers do. */
+@media (pointer: coarse) {
+  .ghost, .chip--btn { min-height: 40px; }
+  .controls__aux { min-height: 40px; }
+  .field__get { min-height: 24px; }
+}
+
+/* On a phone the hint fills the row, so "Stop speaking" wraps underneath it and
+   the row grows by the button's height each time Meraki speaks, squeezing the
+   transcript. Reserve the two-line height permanently: hint (one line, ~17px)
+   + 10px gap + the 40px touch button. After the coarse rule so it wins. */
+@media (max-width: 480px) {
+  .controls__aux { min-height: 68px; }
+}
 
 /* ---------- settings sheet ---------- */
 
@@ -460,7 +560,7 @@ body[data-state="speaking"]::before { opacity: 1; }
 .sheet__actions { display: flex; gap: 10px; align-items: center; }
 .sheet__actions .primary { flex: 1; }
 
-.field { display: flex; flex-direction: column; gap: 6px; position: relative; }
+.field { display: flex; flex-direction: column; gap: 6px; }
 
 .field__label {
   font-size: 12.5px;
@@ -488,19 +588,48 @@ body[data-state="speaking"]::before { opacity: 1; }
   letter-spacing: 0.02em;
   transition: border-color 160ms ease;
 }
-.field input:focus { outline: none; border-color: var(--accent); }
+.field input:focus { border-color: var(--accent); }
 .field input::placeholder { color: var(--text-faint); }
+.field input[aria-invalid="true"] { border-color: var(--accent); }
+
+.field__error {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--accent-text);
+}
+
+/* Which of the three keys are in: a mark each, and one switch for all. */
+.steps { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.steps__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.steps__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.steps__mark { width: 1em; text-align: center; }
+.steps__item[data-done="true"] { color: var(--text); }
+.steps__item[data-done="true"] .steps__mark { color: var(--ok); }
 
 .field__get {
-  position: absolute;
-  top: 1px;
-  right: 0;
+  align-self: flex-start;
   font-family: var(--mono);
-  font-size: 10.5px;
-  color: var(--text-faint);
-  text-decoration: none;
+  font-size: 12px;
+  color: var(--text-dim);
+  /* Underlined at rest: colour alone does not say it is a link. */
+  text-decoration: underline;
 }
-.field__get:hover { color: var(--accent); }
+.field__get:hover { color: var(--accent-text); }
 
 .primary {
   padding: 10px 16px;
@@ -543,27 +672,37 @@ body[data-state="speaking"]::before { opacity: 1; }
   transition: opacity 220ms ease, transform 220ms ease;
 }
 .toast.is-in { opacity: 1; transform: translateY(0); }
-.toast--error { border-color: rgba(232, 67, 74, 0.45); color: var(--accent); }
+.toast--error { border-color: rgba(232, 67, 74, 0.45); color: var(--accent-text); }
 
 /* ---------- responsive ---------- */
 
 @media (max-width: 720px) {
+  .mic { min-height: 52px; }
   .bar { padding: 12px 16px 10px; }
   .chip--mono { display: none; }
   .stage { padding: 14px 16px 18px; gap: 14px; }
   .meter { height: 62px; }
   .log { width: calc(100% - 24px); }
   .turn { grid-template-columns: 60px 1fr; gap: 10px; }
-  .foot { padding: 9px 16px 10px; }
+  .foot { padding: 9px 16px calc(10px + env(safe-area-inset-bottom)); }
   .foot span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 
-/* Short viewports: drop the headline so the meter and controls still fit. */
-@media (max-height: 700px) {
+/* Short viewports: drop the headline so the meter and controls still fit.
+   Keeping the headline below this left the transcript a sliver; most phones
+   in portrait are taller than 680px and still get it. */
+@media (max-height: 680px) {
   .stage__title { display: none; }
   .stage__eyebrow { display: none; }
   .stage { gap: 12px; padding-top: 10px; }
   .meter { height: 60px; }
+}
+
+/* Too short to share the screen between controls and a transcript: let the
+   page scroll instead, and give the log a height worth reading. */
+@media (max-height: 560px) {
+  body { height: auto; min-height: 100vh; min-height: 100dvh; overflow-y: auto; }
+  .log { min-height: 220px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

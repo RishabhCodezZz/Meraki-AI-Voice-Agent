@@ -58,10 +58,10 @@ class _FakeSession:
 
 @pytest.fixture(autouse=True)
 def _reset_style_cache():
-    """The supported-style flag is module state; keep tests independent."""
-    tts._style_supported = True
+    """The rejected-style set is module state; keep tests independent."""
+    tts._style_rejected.clear()
     yield
-    tts._style_supported = True
+    tts._style_rejected.clear()
 
 
 def run(coro):
@@ -139,6 +139,32 @@ def test_style_is_not_retried_once_known_unsupported():
 
     assert "style" not in second.posts[0]
     assert len(second.posts) == 1
+
+
+def test_an_unrelated_400_does_not_disable_the_style():
+    """Out of credits is not a style problem and must not strip the style."""
+    session = _FakeSession([_FakeResponse(400, body="insufficient credits")])
+    with pytest.raises(tts.TTSError, match="insufficient credits"):
+        run(tts.synthesize(session, "key", "One.", VOICE_ID))
+
+    assert tts._style_rejected == set()
+
+    after = _FakeSession([_FakeResponse(200)])
+    run(tts.synthesize(after, "key", "Two.", VOICE_ID))
+    assert after.posts[0]["style"] == VOICE_STYLE
+
+
+def test_a_style_rejection_is_scoped_to_its_voice():
+    """One voice refusing the style must not degrade a different voice."""
+    first = _FakeSession(
+        [_FakeResponse(400, body="style not supported"), _FakeResponse(200)]
+    )
+    run(tts.synthesize(first, "key", "One.", "voice-a"))
+
+    other = _FakeSession([_FakeResponse(200)])
+    run(tts.synthesize(other, "key", "Two.", "voice-b"))
+
+    assert other.posts[0]["style"] == VOICE_STYLE
 
 
 def test_missing_key_fails_before_any_request():

@@ -4,15 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#07090b" />
   <title>{{ app_name }} — Voice Agent</title>
   <meta name="description" content="A real-time voice agent: streaming speech recognition, streaming language model, streaming speech synthesis." />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>&#x1F577;</text></svg>" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8434a' stroke-width='1.6' stroke-linecap='round'%3E%3Cpath d='M12 8.4v7.2M8.6 10.4 12 12l3.4-1.6M8.6 13.6 12 12l3.4 1.6'/%3E%3Cpath d='M12 8.4 8.1 4.9M12 8.4l3.9-3.5M8.6 10.4 3.6 8.7M15.4 10.4l5-1.7M8.6 13.6l-5 1.7M15.4 13.6l5 1.7M12 15.6l-3.9 3.5M12 15.6l3.9 3.5'/%3E%3C/svg%3E" />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/css/styles.css?v={{ asset_v }}" />
 </head>
-<body data-state="idle">
+<body data-state="idle" data-keys-required="{{ 'true' if keys_required else 'false' }}">
 
   <div class="rule" aria-hidden="true"></div>
 
@@ -34,7 +33,7 @@
       <span class="chip chip--mono">Deepgram <i>·</i> Ollama <i>·</i> Murf</span>
       <span class="chip chip--status">
         <span id="status-dot" class="chip__dot" data-state="idle" aria-hidden="true"></span>
-        <span id="status">Ready</span>
+        <span id="status" role="status">Ready</span>
       </span>
       <button id="settings-btn" class="chip chip--btn" type="button">
         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
@@ -47,12 +46,13 @@
   </header>
 
   <main class="stage">
+    <noscript><p class="noscript">Meraki needs JavaScript to run.</p></noscript>
     <p class="stage__eyebrow">Real-time voice</p>
     <h1 class="stage__title">Talk to it.<br /><em>It talks back.</em></h1>
 
     <canvas id="meter" class="meter" aria-hidden="true"></canvas>
 
-    <section id="live" class="live" aria-live="polite">
+    <section id="live" class="live" aria-live="off">
       <p id="live-user" class="live__user"></p>
       <p id="live-reply" class="live__reply"></p>
     </section>
@@ -60,23 +60,36 @@
     <div class="controls">
       <button id="mic-btn" class="mic" type="button" data-active="false">
         <span class="mic__ring" aria-hidden="true"></span>
-        <svg class="mic__icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
+        <svg class="mic__icon mic__icon--mic" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
           <rect x="9" y="2.5" width="6" height="11" rx="3" />
           <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" />
         </svg>
+        <svg class="mic__icon mic__icon--stop" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+          <rect x="6" y="6" width="12" height="12" rx="2" />
+        </svg>
         <span id="mic-label">Start talking</span>
       </button>
-      <p id="hint" class="hint">Click to start a conversation</p>
+      <div class="controls__aux">
+        <p id="hint" class="hint">Click to start a conversation. Space also works.</p>
+        <button id="stop-speaking" class="ghost" type="button" hidden>Stop speaking</button>
+      </div>
+    </div>
+
+    <!-- Inside the stage, not a sixth child of <body>: the page is a five-row
+         grid and a sixth visible child would push the log out of its 1fr row. -->
+    <div id="banner" class="banner" role="alert" hidden>
+      <span id="banner-text" class="banner__text"></span>
+      <button id="banner-retry" class="ghost" type="button">Retry</button>
     </div>
   </main>
 
-  <section class="log">
+  <section class="log" aria-label="Conversation">
     <div class="log__head">
       <h2>Conversation</h2>
       <button id="clear-btn" class="ghost" type="button">Clear</button>
     </div>
     <p id="empty" class="log__empty">Nothing yet. Press the button and say something.</p>
-    <div id="transcript" class="log__body"></div>
+    <div id="transcript" class="log__body" role="log" aria-live="polite" aria-label="Conversation transcript"></div>
   </section>
 
   <footer class="foot">
@@ -84,10 +97,10 @@
     <span class="foot__right">v{{ version }}</span>
   </footer>
 
-  <dialog id="settings" class="sheet">
+  <dialog id="settings" class="sheet" aria-labelledby="settings-title">
     <form id="settings-form" method="dialog" class="sheet__form">
       <div class="sheet__head">
-        <h2>Your API keys</h2>
+        <h2 id="settings-title">Your API keys</h2>
         <button id="close-settings" class="ghost" type="button">Close</button>
       </div>
 
@@ -97,23 +110,35 @@
         can see or spend them.
       </p>
 
-      <label class="field">
-        <span class="field__label">Deepgram <em>speech to text</em></span>
-        <input id="key-deepgram" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key" />
-        <a class="field__get" href="https://console.deepgram.com/signup" target="_blank" rel="noopener noreferrer">Get one</a>
-      </label>
+      <div class="steps">
+        <ol class="steps__list" aria-label="Keys added">
+          <li id="key-step-deepgram" class="steps__item" data-done="false"><span class="steps__mark" aria-hidden="true">&bull;</span>Deepgram<span class="sr-only"></span></li>
+          <li id="key-step-ollama" class="steps__item" data-done="false"><span class="steps__mark" aria-hidden="true">&bull;</span>Ollama<span class="sr-only"></span></li>
+          <li id="key-step-murf" class="steps__item" data-done="false"><span class="steps__mark" aria-hidden="true">&bull;</span>Murf<span class="sr-only"></span></li>
+        </ol>
+        <button id="toggle-keys" class="ghost" type="button">Show</button>
+      </div>
 
-      <label class="field">
-        <span class="field__label">Ollama <em>language model</em></span>
-        <input id="key-ollama" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key" />
-        <a class="field__get" href="https://ollama.com/settings/keys" target="_blank" rel="noopener noreferrer">Get one</a>
-      </label>
+      <div class="field">
+        <label class="field__label" for="key-deepgram">Deepgram <em>speech to text</em></label>
+        <input id="key-deepgram" type="password" aria-describedby="key-error-deepgram" autocomplete="new-password" spellcheck="false" placeholder="Paste your key" />
+        <p class="field__error" id="key-error-deepgram" role="alert" hidden></p>
+        <a class="field__get" href="https://console.deepgram.com/signup" target="_blank" rel="noopener noreferrer">Get a Deepgram key</a>
+      </div>
 
-      <label class="field">
-        <span class="field__label">Murf <em>text to speech</em></span>
-        <input id="key-murf" type="password" autocomplete="off" spellcheck="false" placeholder="ap2_..." />
-        <a class="field__get" href="https://murf.ai/api/docs/introduction/overview" target="_blank" rel="noopener noreferrer">Get one</a>
-      </label>
+      <div class="field">
+        <label class="field__label" for="key-ollama">Ollama <em>language model</em></label>
+        <input id="key-ollama" type="password" aria-describedby="key-error-ollama" autocomplete="new-password" spellcheck="false" placeholder="Paste your key" />
+        <p class="field__error" id="key-error-ollama" role="alert" hidden></p>
+        <a class="field__get" href="https://ollama.com/settings/keys" target="_blank" rel="noopener noreferrer">Get an Ollama key</a>
+      </div>
+
+      <div class="field">
+        <label class="field__label" for="key-murf">Murf <em>text to speech</em></label>
+        <input id="key-murf" type="password" aria-describedby="key-error-murf" autocomplete="new-password" spellcheck="false" placeholder="ap2_..." />
+        <p class="field__error" id="key-error-murf" role="alert" hidden></p>
+        <a class="field__get" href="https://murf.ai/api/docs/introduction/overview" target="_blank" rel="noopener noreferrer">Get a Murf key</a>
+      </div>
 
       {% if keys_required %}
       <p class="sheet__hint">All three are free to sign up for. Nothing works without them.</p>
@@ -131,9 +156,8 @@
     </form>
   </dialog>
 
-  <div id="toasts" class="toasts" aria-live="assertive"></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
 
-  <script>window.MERAKI_KEYS_REQUIRED = {{ "true" if keys_required else "false" }};</script>
   <script type="module" src="/static/js/app.js?v={{ asset_v }}"></script>
 </body>
 </html>

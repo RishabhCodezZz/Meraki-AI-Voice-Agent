@@ -41,6 +41,9 @@ class FakeContext {
     this.state = 'running';
     this.destination = {};
     this.started = [];
+    // When true, decodes stay pending until the test settles them, so a test
+    // can make decodes finish in any order it likes.
+    this.manualDecode = false;
     this.pendingDecodes = [];
     ctx = this;
   }
@@ -66,7 +69,14 @@ class FakeContext {
   decodeAudioData(arrayBuffer) {
     const duration = arrayBuffer.byteLength;
     if (duration === 0) return Promise.reject(new Error('bad audio'));
-    return Promise.resolve({ duration });
+    if (!this.manualDecode) return Promise.resolve({ duration });
+    return new Promise((resolve, reject) => {
+      this.pendingDecodes.push({
+        duration,
+        resolve: () => resolve({ duration }),
+        reject: () => reject(new Error('bad audio')),
+      });
+    });
   }
   async close() {}
 }
@@ -74,11 +84,31 @@ class FakeContext {
 globalThis.AudioContext = FakeContext;
 
 const { SpeechPlayer } = await import('../../static/js/audio-player.js');
+const { PlaybackGate } = await import('../../static/js/playback-gate.js');
 
 /** base64 for n bytes, i.e. n seconds of fake audio. */
 const audio = (seconds) => Buffer.alloc(seconds, 1).toString('base64');
 
 const newPlayer = () => new SpeechPlayer({ onLevel: () => {}, onIdle: () => {} });
+
+/** A player whose decodes only finish when the test says so. */
+async function manualPlayer(onIdle = () => {}) {
+  const player = new SpeechPlayer({ onLevel: () => {}, onIdle });
+  await player.ensureContext();
+  ctx.manualDecode = true;
+  return player;
+}
+
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+/** Settle the pending decode of that length, if the player has asked for it. */
+function settleDecode(seconds, how = 'resolve') {
+  const at = ctx.pendingDecodes.findIndex((d) => d.duration === seconds);
+  if (at === -1) return false;
+  const [decode] = ctx.pendingDecodes.splice(at, 1);
+  decode[how]();
+  return true;
+}
 
 // --- ordering ----------------------------------------------------------------
 
@@ -110,6 +140,108 @@ test('a late chunk does not overlap what is already playing', async () => {
 
   const [a, b] = ctx.started;
   assert.equal(b.startedAt, a.startedAt + 5, 'queued after, not on top of');
+});
+
+test('chunks are scheduled in arrival order even when a later decode finishes first', async () => {
+  const player = await manualPlayer();
+  const a = player.enqueue(audio(3));
+  const b = player.enqueue(audio(1));
+
+  // Finish B first. A serialised player has not even asked for B yet, which is
+  // the point: whichever order the decodes land in, A must play first.
+  await tick();
+  settleDecode(1);
+  await tick();
+  settleDecode(3);
+  await tick();
+  settleDecode(1);
+  await Promise.all([a, b]);
+
+  assert.equal(ctx.started.length, 2);
+  const [first, second] = ctx.started;
+  assert.equal(first.buffer.duration, 3, 'A, the 3 s chunk, plays first');
+  assert.equal(second.startedAt, first.startedAt + 3, 'B follows A exactly');
+});
+
+test('playing is true while a chunk is still decoding', async () => {
+  const player = await manualPlayer();
+  assert.equal(player.playing, false);
+
+  const queued = player.enqueue(audio(2));
+  assert.equal(player.pending, 1, 'counted synchronously, before any await');
+  assert.equal(player.playing, true, 'speech_done must not see a quiet player');
+
+  await tick();
+  settleDecode(2);
+  await queued;
+
+  assert.equal(player.pending, 0);
+  assert.equal(player.playing, true, 'now held by the scheduled source');
+});
+
+test('flush discards chunks that are still queued behind a decode', async () => {
+  const player = await manualPlayer();
+  const a = player.enqueue(audio(2));
+  const b = player.enqueue(audio(2));
+  await tick();
+
+  player.flush();
+  settleDecode(2);
+  await tick();
+  assert.equal(ctx.pendingDecodes.length, 0, 'the stale chunk was skipped, not decoded');
+  await Promise.all([a, b]);
+
+  assert.equal(ctx.started.length, 0, 'nothing from before the flush plays');
+  assert.equal(player.pending, 0);
+  assert.equal(player.playing, false);
+});
+
+test('a failed decode does not block the chunks behind it', async () => {
+  const player = await manualPlayer();
+  const a = player.enqueue(audio(1));
+  const b = player.enqueue(audio(2));
+  const c = player.enqueue(audio(3));
+
+  await tick();
+  settleDecode(1);
+  await tick();
+  settleDecode(2, 'reject');
+  await tick();
+  settleDecode(3);
+  await Promise.all([a, b, c]);
+
+  assert.equal(ctx.started.length, 2, 'A and C played');
+  const [first, third] = ctx.started;
+  assert.equal(third.buffer.duration, 3);
+  assert.equal(third.startedAt, first.startedAt + 1, 'the dropped chunk leaves no hole');
+  assert.equal(player.pending, 0);
+});
+
+test('a chunk that throws before decoding does not wedge the chain', async () => {
+  // enqueue() itself can reject (atob throws on bad base64); the next call must
+  // still run. The stub's atob throws on null, as the real one does on garbage.
+  const player = newPlayer();
+  await assert.rejects(player.enqueue(null));
+  await player.enqueue(audio(1));
+  assert.equal(ctx.started.length, 1);
+  assert.equal(player.pending, 0);
+});
+
+test('a reply queued right after a flush starts fresh', async () => {
+  const player = await manualPlayer();
+  const first = player.enqueue(audio(2));
+  await tick();
+  settleDecode(2);
+  await first;
+
+  player.flush(); // barge-in
+  const second = player.enqueue(audio(1));
+  await tick();
+  settleDecode(1);
+  await second;
+
+  const last = ctx.started[ctx.started.length - 1];
+  assert.ok(last.startedAt < 0.2, 'the new reply starts fresh');
 });
 
 // --- barge-in ----------------------------------------------------------------
@@ -184,6 +316,90 @@ test('reports idle only once every source has finished', async () => {
   b.onended();
   assert.equal(idle, 1);
   assert.equal(player.playing, false);
+});
+
+test('does not report idle in the gap between chunks of one reply', async () => {
+  let idle = 0;
+  const player = await manualPlayer(() => idle++);
+  const a = player.enqueue(audio(1));
+  const b = player.enqueue(audio(1));
+
+  await tick();
+  settleDecode(1);
+  await a;
+  ctx.started[0].onended(); // A finishes while B is still decoding
+  assert.equal(idle, 0, 'B is on its way');
+  assert.equal(player.playing, true);
+
+  await tick();
+  settleDecode(1);
+  await b;
+  ctx.started[1].onended();
+  assert.equal(idle, 1);
+});
+
+test('reports idle when the last chunk is dropped after earlier audio has finished', async () => {
+  // Nothing is left to fire onended, so the player has to say it itself or the
+  // UI would wait on a reply that is already over.
+  let idle = 0;
+  const player = await manualPlayer(() => idle++);
+  const a = player.enqueue(audio(1));
+  const b = player.enqueue(audio(2));
+
+  await tick();
+  settleDecode(1);
+  await a;
+  ctx.started[0].onended();
+  assert.equal(idle, 0);
+
+  await tick();
+  settleDecode(2, 'reject');
+  await b;
+  assert.equal(idle, 1);
+  assert.equal(player.playing, false);
+});
+
+test('flush itself does not report idle', async () => {
+  let idle = 0;
+  const player = await manualPlayer(() => idle++);
+  const a = player.enqueue(audio(1));
+  await tick();
+  player.flush();
+  assert.equal(idle, 0, 'the interrupt already told the UI what state it is in');
+  settleDecode(1);
+  await a;
+});
+
+test('a stale decode finishing after a flush still lets the next turn settle', async () => {
+  // The old reply's chunk is mid-decode when the user barges in, and the next
+  // turn ends while that stale task still holds `pending` above zero. Nothing
+  // plays, so nothing fires onended: if the stale task stays silent the gate
+  // waits for an idle signal that never comes and the UI is stuck on Speaking.
+  let idle = 0;
+  let settled = 0;
+  let gate;
+  const player = await manualPlayer(() => {
+    idle++;
+    gate.playerIdle();
+  });
+  gate = new PlaybackGate({ isPlaying: () => player.playing, onSettled: () => settled++ });
+
+  const stale = player.enqueue(audio(1));
+  await tick();
+  player.flush(); // barge-in
+  gate.cancel();
+
+  gate.turnStarted(); // the next turn ends without audio of its own
+  gate.turnEnded();
+  assert.equal(player.playing, true, 'the stale task is still counted');
+  assert.equal(settled, 0);
+
+  settleDecode(1);
+  await stale;
+  assert.equal(idle, 1, 'the player reports quiet once the stale task is gone');
+  assert.equal(settled, 1, 'and the gate, which was waiting on it, settles');
+  assert.equal(player.playing, false);
+  assert.equal(ctx.started.length, 0);
 });
 
 test('a suspended context is resumed before scheduling', async () => {

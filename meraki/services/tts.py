@@ -25,6 +25,7 @@ import asyncio
 import base64
 import logging
 import re
+from contextlib import aclosing
 from typing import AsyncGenerator, AsyncIterable, Optional
 
 import aiohttp
@@ -52,9 +53,10 @@ _SENTENCE_END = re.compile(r"[.!?…]['\")\]]*\s")
 # decimals and times.
 _CLAUSE_END = re.compile(r"[,;:]\s|[—–]\s?")
 
-# Set once, the first time Murf tells us the style is not valid for this voice,
-# so we stop paying for a failed request on every subsequent chunk.
-_style_supported = True
+# (voice, model) pairs Murf has said do not take the configured style, so we stop
+# paying for a failed request on every subsequent chunk. Keyed rather than a
+# single flag because one voice refusing a style says nothing about another.
+_style_rejected: set[tuple[str, str]] = set()
 
 
 class TTSError(RuntimeError):
@@ -127,8 +129,6 @@ async def synthesize(
     if not api_key:
         raise TTSError("Murf API key is missing.")
 
-    global _style_supported
-
     plain = {
         "text": text,
         "voiceId": voice_id,
@@ -137,13 +137,16 @@ async def synthesize(
         "sampleRate": TTS_SAMPLE_RATE,
         "channelType": "MONO",
     }
-    styled = VOICE_STYLE and _style_supported
+    styled = bool(VOICE_STYLE) and (voice_id, MURF_MODEL) not in _style_rejected
     # Build a separate dict rather than mutating one across both attempts.
     payload = {**plain, "style": VOICE_STYLE} if styled else plain
 
     result, rejected = await _post(session, api_key, payload)
 
-    if rejected is not None and styled:
+    # Only a 400 that names the style is a style problem. Anything else (credits,
+    # a bad voice id) would fail the plain request too, and must not be mistaken
+    # for a reason to strip the style from every later call.
+    if rejected is not None and styled and "style" in rejected.lower():
         # This voice does not take the configured style. Drop it and carry on
         # rather than failing the turn; remember so we stop retrying.
         logger.warning(
@@ -152,7 +155,7 @@ async def synthesize(
             voice_id,
             rejected,
         )
-        _style_supported = False
+        _style_rejected.add((voice_id, MURF_MODEL))
         result, rejected = await _post(session, api_key, plain)
 
     if result is None:
@@ -198,28 +201,57 @@ async def stream_speech(
 ) -> AsyncGenerator[str, None]:
     """Yield base64 MP3 chunks, in order, as the text arrives.
 
-    Up to ``MAX_IN_FLIGHT`` chunks are synthesised concurrently. Cancelling the
-    consumer cancels any outstanding synthesis.
+    Up to ``MAX_IN_FLIGHT`` chunks are synthesised concurrently. A finished chunk
+    is yielded as soon as it and every earlier one are done, without waiting for
+    more text. Cancelling the consumer cancels outstanding synthesis and closes
+    the text stream.
     """
-    pending: list[asyncio.Task[str]] = []
+    slots = asyncio.Semaphore(MAX_IN_FLIGHT)
+    # Synth tasks in chunk order, then the end marker or a text-side exception.
+    queue: asyncio.Queue = asyncio.Queue()
+    tasks: list[asyncio.Task[str]] = []
+    done = object()
 
-    async def drain(limit: int) -> AsyncGenerator[str, None]:
-        while len(pending) > limit:
-            yield await pending.pop(0)
+    async def produce() -> None:
+        # The producer runs on its own so the text stream keeps being pulled
+        # while the consumer is waiting on a synth task; otherwise text frames
+        # stall behind audio.
+        text_iter = text_stream.__aiter__()
+        try:
+            async with aclosing(chunk_stream(text_iter)) as chunks:
+                async for chunk in chunks:
+                    await slots.acquire()
+                    task = asyncio.create_task(
+                        synthesize(session, api_key, chunk, voice_id)
+                    )
+                    task.add_done_callback(lambda _: slots.release())
+                    tasks.append(task)
+                    queue.put_nowait(task)
+            queue.put_nowait(done)
+        except Exception as exc:
+            queue.put_nowait(exc)
+        finally:
+            # chunk_stream closing does not close the stream it reads from.
+            aclose = getattr(text_iter, "aclose", None)
+            if aclose is not None:
+                await aclose()
 
+    producer = asyncio.create_task(produce())
     try:
-        async for chunk in chunk_stream(text_stream):
-            pending.append(
-                asyncio.create_task(synthesize(session, api_key, chunk, voice_id))
-            )
-            async for ready in drain(MAX_IN_FLIGHT - 1):
-                yield ready
-
-        async for ready in drain(0):
-            yield ready
+        while True:
+            item = await queue.get()
+            if item is done:
+                return
+            if isinstance(item, Exception):
+                raise item
+            yield await item
     finally:
-        for task in pending:
+        producer.cancel()
+        for task in tasks:
             task.cancel()
+        # Await them so a failed task is retrieved, not left to log
+        # "exception was never retrieved" when it is garbage collected.
+        await asyncio.gather(producer, *tasks, return_exceptions=True)
 
 
 def _explain(status: int) -> str:

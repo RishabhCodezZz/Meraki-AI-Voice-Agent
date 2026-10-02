@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from . import __version__
+
 try:  # optional: local dev convenience
     from dotenv import load_dotenv
 
@@ -14,7 +16,8 @@ except ImportError:  # pragma: no cover - dotenv is optional in production
 
 
 APP_NAME = "Meraki"
-APP_VERSION = "3.0.0"
+# One source: meraki/__init__.py. Imported rather than copied so it cannot drift.
+APP_VERSION = __version__
 
 # --- Upstream services -------------------------------------------------------
 
@@ -31,11 +34,14 @@ DEEPGRAM_MODEL = os.getenv("MERAKI_STT_MODEL", "nova-3")
 # Locked server-side. Visitors cannot change these - the browser is not asked
 # and any model/voice it sends is ignored.
 #
-# nemotron-3-nano is the fastest model on Ollama Cloud's free tier, which is what
-# matters here: time to first token is heard directly as dead air. Falcon is not
-# an Ollama Cloud model (and is TII's, not ours), so there is nothing faster to
-# move to on this tier.
-MODEL = os.getenv("MERAKI_MODEL", "nemotron-3-nano:30b")
+# Time to first token is what matters here: it is heard directly as dead air.
+# nemotron-3-nano was the first choice (207 ms when measured 2026-09-07), but on
+# 2026-10-02 it took 18-30 s to the first token on the free tier, six runs out of
+# six, while gemma4:31b on the same key answered in about 0.5 s. gpt-oss:20b
+# returned an empty reply (it is a reasoning model and ignored think:false), and
+# glm-5.3-flash / deepseek-v4.1-flash are not on the free tier (HTTP 402). Re-measure
+# before changing this again; MERAKI_MODEL overrides it per deployment.
+MODEL = os.getenv("MERAKI_MODEL", "gemma4:31b")
 
 # Natalie with the Conversational style. The style is what makes her sound like
 # a person talking rather than an announcer reading - it matters more than which
@@ -63,6 +69,17 @@ TTS_TIMEOUT = float(os.getenv("MERAKI_TTS_TIMEOUT", "20"))
 MAX_HISTORY_MESSAGES = 40
 MAX_SESSIONS = 500  # LRU cap so the in-memory store cannot grow without bound
 SESSION_TTL_SECONDS = 60 * 60 * 2
+
+# --- Network -----------------------------------------------------------------
+
+# Extra origins allowed to open the WebSocket, comma-separated, e.g.
+# "https://app.example.org". The page's own host is always allowed; this is only
+# for a front end served from somewhere else. Read once at import.
+ALLOWED_ORIGINS = frozenset(
+    origin.strip().rstrip("/")
+    for origin in os.getenv("MERAKI_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+)
 
 # Text is sent to TTS in chunks so audio starts playing before the model has
 # finished writing. These are floors, not targets: the first chunk cuts at the
@@ -137,9 +154,15 @@ class ApiKeys:
         )
 
     @classmethod
-    def from_payload(cls, payload: dict) -> "ApiKeys":
-        """Browser-supplied keys, falling back to the server's own."""
+    def from_payload(cls, payload: object) -> "ApiKeys":
+        """Browser-supplied keys, falling back to the server's own.
+
+        The payload comes straight off the wire, so it may be any JSON value; one
+        that is not an object is treated as having sent no keys.
+        """
         env = cls.from_env()
+        if not isinstance(payload, dict):
+            payload = {}
 
         def pick(*names: str, fallback: str) -> str:
             for name in names:

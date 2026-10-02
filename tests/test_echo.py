@@ -57,3 +57,24 @@ def test_empty_transcripts_are_not_echo():
 
 def test_a_question_containing_a_spoken_word_still_interrupts():
     assert not looks_like_echo("wait what model", SPOKEN)
+
+
+def test_a_short_word_inside_a_longer_word_is_not_echo():
+    """Character substrings: "no" lives inside "know", "yes" inside "yesterday"."""
+    spoken = "I don't know what happened yesterday."
+    assert not looks_like_echo("no wait", spoken)
+    assert not looks_like_echo("yes", spoken)
+
+
+def test_a_single_word_is_never_echo():
+    """One word is a plausible real answer ("no") and too little to be sure of."""
+    assert not looks_like_echo("no", "No, it is not.")
+
+
+def test_whole_words_in_order_are_still_echo():
+    assert looks_like_echo("it is not", "No, it is not.")
+
+
+def test_a_phrase_spanning_a_word_boundary_does_not_match_mid_word():
+    """"ick is to" is inside "trick is to" only if words may start mid-word."""
+    assert not looks_like_echo("ick is to", SPOKEN)

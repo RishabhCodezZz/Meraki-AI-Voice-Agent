@@ -289,5 +289,17 @@ def test_every_frame_carries_a_type():
     assert protocol.error("c", "m", fatal=True)["fatal"] is True
 
 
+# --- version -----------------------------------------------------------------
+
+
+def test_version_has_one_source():
+    # The version used to be written out in two files and drifted. config
+    # re-exports the package's, so /health, the page and the app title agree.
+    import meraki
+    from meraki import config
+
+    assert config.APP_VERSION == meraki.__version__
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

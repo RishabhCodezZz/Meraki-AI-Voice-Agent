@@ -18,6 +18,8 @@ export class SpeechPlayer {
     this.nextStart = 0;
     this.raf = 0;
     this.generation = 0;
+    this.pending = 0; // chunks queued or decoding, not yet scheduled
+    this.tail = Promise.resolve();
   }
 
   async ensureContext() {
@@ -34,13 +36,40 @@ export class SpeechPlayer {
     return this.ctx;
   }
 
+  /** True from the moment a chunk is queued, not just once it is scheduled. */
   get playing() {
-    return this.sources.size > 0;
+    return this.sources.size > 0 || this.pending > 0;
   }
 
-  /** Queue one base64 MP3 chunk. Resolves once it has been scheduled. */
-  async enqueue(base64) {
+  /**
+   * Queue one base64 MP3 chunk. Resolves once it has been scheduled.
+   *
+   * Calls run strictly one after another. Frames arrive in order but decodes
+   * finish whenever they like, so left alone a short chunk can overtake a long
+   * one and the words play out of order.
+   */
+  enqueue(base64) {
     const generation = this.generation;
+    this.pending++;
+    const task = this.tail
+      .then(() => this.schedule(base64, generation))
+      .finally(() => {
+        this.pending--;
+        // The last chunk may have been dropped with nothing playing to fire
+        // onended, and someone is waiting to hear that we are done. That holds
+        // for a task from before a flush too: it can be the last thing keeping
+        // `pending` up while the next turn's end waits on us, and a gate that
+        // is not waiting ignores the signal anyway.
+        this.settleIfIdle();
+      });
+    // One bad chunk must not poison the chain behind it.
+    this.tail = task.catch(() => {});
+    return task;
+  }
+
+  async schedule(base64, generation) {
+    // Flushed while this waited its turn: skip the decode altogether.
+    if (generation !== this.generation) return;
     const ctx = await this.ensureContext();
 
     const binary = atob(base64);
@@ -71,14 +100,18 @@ export class SpeechPlayer {
     this.sources.add(source);
     source.onended = () => {
       this.sources.delete(source);
-      if (this.sources.size === 0) {
-        this.nextStart = 0;
-        this.stopLevels();
-        this.onIdle?.();
-      }
+      this.settleIfIdle();
     };
 
     this.startLevels();
+  }
+
+  /** Report idle only when nothing is playing and nothing is on its way. */
+  settleIfIdle() {
+    if (this.sources.size > 0 || this.pending > 0) return;
+    this.nextStart = 0;
+    this.stopLevels();
+    this.onIdle?.();
   }
 
   /** Barge-in: drop everything scheduled and not yet heard. */

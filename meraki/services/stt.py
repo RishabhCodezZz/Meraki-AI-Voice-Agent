@@ -54,7 +54,11 @@ def _params() -> dict[str, str]:
 
 
 class SpeechError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, auth_rejected: bool = False) -> None:
+        super().__init__(message)
+        # The key itself was refused (401/403). Nothing but a different key
+        # fixes that, so the browser is told to open the key dialog, not retry.
+        self.auth_rejected = auth_rejected
 
 
 class SpeechStream:
@@ -85,10 +89,13 @@ class SpeechStream:
                 headers={"Authorization": f"Token {self._api_key}"},
                 heartbeat=None,  # we send Deepgram's own KeepAlive instead
                 max_msg_size=0,
+                # aiohttp's default 10s close wait would let a dead peer stall
+                # teardown (and the visitor's reconnect) for that long.
+                timeout=aiohttp.ClientWSTimeout(ws_close=5),
             )
         except aiohttp.WSServerHandshakeError as exc:
             if exc.status in (401, 403):
-                raise SpeechError("Deepgram rejected that API key.") from exc
+                raise SpeechError("Deepgram rejected that API key.", auth_rejected=True) from exc
             raise SpeechError(f"Deepgram refused the connection ({exc.status}).") from exc
         except aiohttp.ClientError as exc:
             raise SpeechError("Could not reach Deepgram.") from exc
