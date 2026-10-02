@@ -509,6 +509,14 @@ body[data-state="speaking"]::before { opacity: 1; }
   .field__get { min-height: 24px; }
 }
 
+/* On a phone the hint fills the row, so "Stop speaking" wraps underneath it and
+   the row grows by the button's height each time Meraki speaks, squeezing the
+   transcript. Reserve the two-line height permanently: hint (one line, ~17px)
+   + 10px gap + the 40px touch button. After the coarse rule so it wins. */
+@media (max-width: 480px) {
+  .controls__aux { min-height: 68px; }
+}
+
 /* ---------- settings sheet ---------- */
 
 .chip--btn {

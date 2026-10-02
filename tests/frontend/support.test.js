@@ -10,6 +10,10 @@ import assert from 'node:assert/strict';
 import {
   detectSupport,
   describeStartError,
+  isMicBlocked,
+  MIC_BLOCKED_ADVICE,
+  endsTurn,
+  TURN_ENDING_ERROR_CODES,
   withTimeout,
   makeSessionId,
   isValidSessionId,
@@ -100,6 +104,49 @@ test('other errors keep their message, with a fallback when there is none', () =
   assert.equal(describeStartError(new Error('')), 'Could not start.');
   assert.equal(describeStartError(undefined), 'Could not start.');
   assert.equal(describeStartError(null), 'Could not start.');
+});
+
+// --- isMicBlocked ------------------------------------------------------------
+
+test('only a denied microphone counts as blocked, which Retry cannot fix', () => {
+  assert.equal(isMicBlocked({ name: 'NotAllowedError' }), true);
+  assert.equal(isMicBlocked({ name: 'SecurityError' }), true);
+  // These can clear up by themselves (plug it in, close the other app).
+  for (const name of ['NotFoundError', 'NotReadableError', 'OverconstrainedError', 'Error']) {
+    assert.equal(isMicBlocked({ name }), false, name);
+  }
+  assert.equal(isMicBlocked(new Error('The server closed the connection.')), false);
+  assert.equal(isMicBlocked(undefined), false);
+  assert.equal(isMicBlocked(null), false);
+});
+
+test('the advice for a blocked microphone says where to fix it and what to press', () => {
+  assert.match(MIC_BLOCKED_ADVICE, /site settings/);
+  assert.match(MIC_BLOCKED_ADVICE, /Start talking/);
+});
+
+// --- endsTurn ----------------------------------------------------------------
+
+test('errors from the model, the voice, the network or a crash end the turn', () => {
+  for (const code of ['llm', 'tts', 'network', 'internal']) {
+    assert.equal(endsTurn(code), true, code);
+  }
+});
+
+test('a transcription error does not end a turn that is still being spoken', () => {
+  // Deepgram reports a problem while a reply is mid-flight; the reply goes on.
+  assert.equal(endsTurn('stt'), false);
+});
+
+test('unknown, missing or inherited codes never end a turn', () => {
+  for (const code of ['keys', 'handshake', 'something-new', '', undefined, null, 42,
+    '__proto__', 'constructor', 'toString']) {
+    assert.equal(endsTurn(code), false, String(code));
+  }
+});
+
+test('the set of turn-ending codes is exactly the four the pipeline sends', () => {
+  assert.deepEqual([...TURN_ENDING_ERROR_CODES].sort(), ['internal', 'llm', 'network', 'tts']);
 });
 
 // --- withTimeout -------------------------------------------------------------

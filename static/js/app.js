@@ -6,8 +6,11 @@ import {
   CONNECT_RETRY_DELAY_MS,
   describeStartError,
   detectSupport,
+  endsTurn,
+  isMicBlocked,
   isValidSessionId,
   makeSessionId,
+  MIC_BLOCKED_ADVICE,
   networkError,
   pickKeys,
   retryWithin,
@@ -79,6 +82,9 @@ let supportReason = '';
 // pressed, so the rest of its audio and caption would arrive and play right
 // back; this drops them until the next turn starts.
 let muteReply = false;
+// Set by Clear. Like muteReply, but also stops the reply text being filed in a
+// transcript the visitor has just emptied. Both reset when the next turn starts.
+let discardReply = false;
 // The connect attempt a start is currently making, hoisted so a Cancel (which
 // runs stopRecording, not the start's own finally) can close its socket at once.
 let pendingAttempt = null;
@@ -317,7 +323,13 @@ async function clearHistory() {
     toast('Could not clear the conversation.', 'error');
     return;
   }
-  // Whatever is still being spoken belongs to the conversation just wiped.
+  // Whatever is still being spoken belongs to the conversation just wiped. The
+  // server's turn carries on (nothing tells it otherwise), so what it still
+  // sends is dropped here, as for Stop speaking, and its reply text is not
+  // filed into the empty transcript either. The gate still settles on the
+  // turn's own speech_done.
+  muteReply = true;
+  discardReply = true;
   player?.flush();
   gate?.cancel();
   replyBuffer = '';
@@ -455,6 +467,7 @@ function handleMessage(message) {
       player.flush();
       gate.turnStarted();
       muteReply = false;
+      discardReply = false;
       setState('thinking', 'Thinking');
       break;
 
@@ -465,7 +478,7 @@ function handleMessage(message) {
       break;
 
     case 'reply_done':
-      addTurn('assistant', message.text);
+      if (!discardReply) addTurn('assistant', message.text);
       clearLive();
       replyBuffer = '';
       break;
@@ -501,6 +514,10 @@ function handleMessage(message) {
         showFailure(message.message, message.code);
         gate.cancel();
         stopRecording({ silent: true });
+      } else if (!endsTurn(message.code)) {
+        // A transcription hiccup (code `stt`) says nothing about the reply being
+        // spoken. Ending the turn here settled the gate early; the real
+        // speech_done was then ignored and "Speaking" stuck. Toast only.
       } else if (gate.turnOpen) {
         // The turn is over without (more) audio; settle once what is queued
         // has played.
@@ -622,7 +639,12 @@ async function startRecording() {
   } catch (error) {
     // A cancelled start says nothing: the visitor asked for it to stop.
     if (!cancelled()) {
-      showFailure(describeStartError(error), error?.code);
+      if (isMicBlocked(error)) {
+        // Retry would be refused again at once; say what to change instead.
+        showBanner(`${describeStartError(error)} ${MIC_BLOCKED_ADVICE}`);
+      } else {
+        showFailure(describeStartError(error), error?.code);
+      }
       await stopRecording({ silent: true });
     }
   } finally {

@@ -31,12 +31,23 @@ export function detectSupport(env = globalThis) {
   return { ok: true };
 }
 
+/**
+ * Did the browser refuse the microphone outright? Retrying that fails again at
+ * once, until the visitor changes the site's permission, so it gets advice
+ * instead of a Retry button. The other getUserMedia failures (unplugged, busy)
+ * can clear up by themselves.
+ */
+export function isMicBlocked(error) {
+  return error?.name === 'NotAllowedError' || error?.name === 'SecurityError';
+}
+
+export const MIC_BLOCKED_ADVICE =
+  "Allow the microphone in your browser's site settings, then press Start talking.";
+
 /** Turn whatever start-up threw into something a visitor can act on. */
 export function describeStartError(error) {
+  if (isMicBlocked(error)) return 'Microphone access was blocked.';
   switch (error?.name) {
-    case 'NotAllowedError':
-    case 'SecurityError':
-      return 'Microphone access was blocked.';
     case 'NotFoundError':
     case 'OverconstrainedError':
       return 'No microphone was found.';
@@ -174,4 +185,17 @@ export function pickKeys(keys, fields) {
     if (typeof value === 'string' && value) picked[name] = value;
   }
   return picked;
+}
+
+/**
+ * Non-fatal error codes that mean the current turn is over. An `stt` error
+ * (Deepgram complaining mid-reply) is also sent non-fatal, but it says nothing
+ * about the reply being spoken: ending the turn on it settled the gate early
+ * and left "Speaking" stuck once the real `speech_done` was ignored.
+ */
+export const TURN_ENDING_ERROR_CODES = new Set(['llm', 'tts', 'network', 'internal']);
+
+/** Does an error with this code end the turn in flight? Unknown codes do not. */
+export function endsTurn(code) {
+  return TURN_ENDING_ERROR_CODES.has(code);
 }
