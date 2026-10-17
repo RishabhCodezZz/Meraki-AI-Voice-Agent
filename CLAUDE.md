@@ -330,10 +330,11 @@ The original was a single 590-line `app.py` plus one 390-line HTML file. Audited
   the trade.
 - **Gemma 4 31B, locked (was Nemotron 3 Nano until 2026-10-02).** On a voice
   agent, time-to-first-token is heard directly as dead air. Nano was the fastest
-  on the free tier when first measured (207 ms), but on 2026-10-02 it took 18-30 s
-  to the first token on six runs out of six, so replies arrived after the user had
+  on the free tier when first measured (207 ms), but on 2026-10-02 it took 4-30 s
+  to the first token (median ~19 s over eight timed runs; later that day one 40 s
+  timeout and one 0.64 s), so replies arrived after the user had
   already talked over them (a >= 2 word partial cancels the turn). `gemma4:31b` on
-  the same key: ~0.5 s. `gpt-oss:20b` returned an empty reply; `glm-5.3-flash` and
+  the same key: 0.5-1.5 s every time. `gpt-oss:20b` returned an empty reply; `glm-5.3-flash` and
   `deepseek-v4.1-flash` need paid credits. Re-measure before changing it again.
   Falcon was requested earlier but is not an Ollama Cloud model at all (and is
   TII's, not ours).
@@ -368,7 +369,7 @@ Re-measured 2026-10-02 (ten turns, ten different questions, `gemma4:31b`, server
 side from transcript to frame sent, excluding Deepgram's 350 ms endpointing):
 first token median 0.62 s (0.53-1.50), first audio frame median 1.28 s
 (0.86-2.48), whole reply sent median 1.59 s (1.20-2.48). On the same day
-`nemotron-3-nano:30b` took 18-30 s to its first token.
+`nemotron-3-nano:30b` took 4-30 s to its first token (median ~19 s over eight runs).
 
 - Deepgram transcribed a 3.3s sample word-perfect, and `speech_final` fires once
   trailing silence arrives. Without trailing silence it never fires, and since a

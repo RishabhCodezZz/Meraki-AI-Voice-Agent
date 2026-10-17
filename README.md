@@ -102,8 +102,8 @@ never asks, and anything a client sends for them is ignored.
 
 - **`gemma4:31b`** on Ollama Cloud. Time to first token is the property that
   matters here: it is heard directly as dead air. On 2026-10-02 this model
-  answered in about 0.5 s on the free tier while `nemotron-3-nano:30b`, the
-  original choice, took 18–30 s. Requests send `think: false`, because a
+  answered in 0.5–1.5 s on the free tier while `nemotron-3-nano:30b`, the
+  original choice, took 4–30 s (median about 19 s). Requests send `think: false`, because a
   reasoning model's reasoning tokens arrive before anything speakable and buy
   nothing when the output is audio.
 - **`en-US-natalie` with the `Conversational` style.** The style does more for
@@ -246,8 +246,10 @@ anything, while `stream` delivers its first byte in 150–280 ms.
 
 The third row is a smaller gain than it looks. What the model switch really
 bought is consistency. On the day of the 10-run test, `nemotron-3-nano:30b` took
-18–30 s to produce its first token (six runs out of six) and first audio arrived
-19–30 s after the question. `gemma4:31b` never went past 1.5 s to its first token.
+4–30 s to produce its first token (median about 19 s over eight runs; later that
+day one run timed out at 40 s and another took 0.64 s), and in five full pipeline
+runs first audio arrived 19–30 s after the question. `gemma4:31b` never went past
+1.5 s to its first token.
 
 Not re-measured since 2026-09-07: transcription accuracy (word-perfect on a clean
 3.3 s sample).

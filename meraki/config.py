@@ -36,8 +36,9 @@ DEEPGRAM_MODEL = os.getenv("MERAKI_STT_MODEL", "nova-3")
 #
 # Time to first token is what matters here: it is heard directly as dead air.
 # nemotron-3-nano was the first choice (207 ms when measured 2026-09-07), but on
-# 2026-10-02 it took 18-30 s to the first token on the free tier, six runs out of
-# six, while gemma4:31b on the same key answered in about 0.5 s. gpt-oss:20b
+# 2026-10-02 it took 4-30 s to the first token on the free tier (median ~19 s over
+# eight runs; later one 40 s timeout and one 0.64 s), while gemma4:31b on the same
+# key took 0.5-1.5 s every time. gpt-oss:20b
 # returned an empty reply (it is a reasoning model and ignored think:false), and
 # glm-5.3-flash / deepseek-v4.1-flash are not on the free tier (HTTP 402). Re-measure
 # before changing this again; MERAKI_MODEL overrides it per deployment.
